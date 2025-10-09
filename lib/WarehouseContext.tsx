@@ -2,6 +2,11 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 
+const EFFICIENCY_CALCULATION_INTERVAL = 2000
+const EFFICIENCY_HISTORY_LENGTH = 7
+const INITIAL_COMPLETED_ORDERS = 247
+const TOTAL_ROBOTS = 4
+
 export interface RobotData {
   id: number
   status: 'active' | 'charging' | 'idle'
@@ -11,33 +16,52 @@ export interface RobotData {
   speed: number
 }
 
+interface Stats {
+  completedOrders: number
+  activeRobots: number
+}
+
 interface WarehouseContextType {
   robots: RobotData[]
   updateRobot: (id: number, data: Partial<RobotData>) => void
-  stats: {
-    completedOrders: number
-    activeRobots: number
-  }
+  stats: Stats
   incrementOrders: () => void
   efficiencyHistory: number[]
 }
 
+interface WarehouseProviderProps {
+  children: ReactNode
+}
+
+const INITIAL_ROBOTS: RobotData[] = [
+  { id: 1, status: 'active', task: 'Idle', battery: 87, location: 'Dock', speed: 1.2 },
+  { id: 2, status: 'active', task: 'Idle', battery: 92, location: 'Dock', speed: 0.8 },
+  { id: 3, status: 'active', task: 'Idle', battery: 78, location: 'Dock', speed: 1.5 },
+  { id: 4, status: 'active', task: 'Idle', battery: 65, location: 'Dock', speed: 1.0 },
+]
+
+const INITIAL_EFFICIENCY_HISTORY: number[] = [85, 88, 90, 87, 92, 89, 91]
+
 const WarehouseContext = createContext<WarehouseContextType | undefined>(undefined)
 
-export function WarehouseProvider({ children }: { children: ReactNode }) {
-  const [robots, setRobots] = useState<RobotData[]>([
-    { id: 1, status: 'active', task: 'Idle', battery: 87, location: 'Dock', speed: 1.2 },
-    { id: 2, status: 'active', task: 'Idle', battery: 92, location: 'Dock', speed: 0.8 },
-    { id: 3, status: 'active', task: 'Idle', battery: 78, location: 'Dock', speed: 1.5 },
-    { id: 4, status: 'active', task: 'Idle', battery: 65, location: 'Dock', speed: 1.0 },
-  ])
+function calculateFleetEfficiency(robots: RobotData[]): number {
+  const activeCount = robots.filter(r => r.status === 'active').length
+  const totalRobots = robots.length
+  const avgBattery = robots.reduce((sum, r) => sum + r.battery, 0) / totalRobots
+  
+  const utilization = (activeCount / totalRobots) * 100
+  const batteryFactor = avgBattery / 100
+  
+  return utilization * batteryFactor
+}
 
-  const [stats, setStats] = useState({
-    completedOrders: 247,
-    activeRobots: 4
+export function WarehouseProvider({ children }: WarehouseProviderProps) {
+  const [robots, setRobots] = useState<RobotData[]>(INITIAL_ROBOTS)
+  const [stats, setStats] = useState<Stats>({
+    completedOrders: INITIAL_COMPLETED_ORDERS,
+    activeRobots: TOTAL_ROBOTS
   })
-
-  const [efficiencyHistory, setEfficiencyHistory] = useState<number[]>([85, 88, 90, 87, 92, 89, 91])
+  const [efficiencyHistory, setEfficiencyHistory] = useState<number[]>(INITIAL_EFFICIENCY_HISTORY)
 
   const updateRobot = (id: number, data: Partial<RobotData>) => {
     setRobots(prev => prev.map(robot => 
@@ -46,47 +70,50 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   }
 
   const incrementOrders = () => {
-    setStats(prev => ({ ...prev, completedOrders: prev.completedOrders + 1 }))
+    setStats(prev => ({ 
+      ...prev, 
+      completedOrders: prev.completedOrders + 1 
+    }))
   }
 
-  // Calculate fleet efficiency every 2 seconds - FIXED VERSION
   useEffect(() => {
     const interval = setInterval(() => {
-      // Get current robot state from the closure
       setRobots(currentRobots => {
-        // Calculate using current robot data
-        const activeCount = currentRobots.filter(r => r.status === 'active').length
-        const totalRobots = currentRobots.length
-        const avgBattery = currentRobots.reduce((sum, r) => sum + r.battery, 0) / totalRobots
+        const efficiency = calculateFleetEfficiency(currentRobots)
         
-        // Fleet utilization: percentage of active robots weighted by battery health
-        const utilization = (activeCount / totalRobots) * 100
-        const batteryFactor = avgBattery / 100
-        const efficiency = utilization * batteryFactor
-        
-        // Update efficiency history
         setEfficiencyHistory(prev => {
-          const newHistory = [...prev.slice(-6), efficiency] // Keep last 7 points
+          const newHistory = [...prev.slice(-(EFFICIENCY_HISTORY_LENGTH - 1)), efficiency]
           return newHistory
         })
         
-        // Return robots unchanged (we're just reading them)
         return currentRobots
       })
-    }, 2000)
+    }, EFFICIENCY_CALCULATION_INTERVAL)
     
     return () => clearInterval(interval)
-  }, []) // Empty dependency - interval continuously reads current state
+  }, [])
+
+  const contextValue: WarehouseContextType = {
+    robots,
+    updateRobot,
+    stats,
+    incrementOrders,
+    efficiencyHistory
+  }
 
   return (
-    <WarehouseContext.Provider value={{ robots, updateRobot, stats, incrementOrders, efficiencyHistory }}>
+    <WarehouseContext.Provider value={contextValue}>
       {children}
     </WarehouseContext.Provider>
   )
 }
 
-export function useWarehouse() {
+export function useWarehouse(): WarehouseContextType {
   const context = useContext(WarehouseContext)
-  if (!context) throw new Error('useWarehouse must be used within WarehouseProvider')
+  
+  if (!context) {
+    throw new Error('useWarehouse must be used within WarehouseProvider')
+  }
+  
   return context
 }

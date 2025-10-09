@@ -7,29 +7,87 @@ import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useWarehouse } from '@/lib/WarehouseContext'
 
-function Robot({ 
-  position, 
-  id, 
-  color,
-  shelfPositions 
-}: { 
-  position: [number, number, number], 
-  id: number, 
-  color: string,
+const BATTERY_DRAIN_RATE = 1.5
+const BATTERY_CHARGE_RATE = 8
+const LOW_BATTERY_THRESHOLD = 10
+const FULL_BATTERY_THRESHOLD = 95
+const PICKING_DURATION = 2
+const DELIVERING_DURATION = 2
+const TARGET_DISTANCE_THRESHOLD = 0.5
+const MOVEMENT_SPEED_MULTIPLIER = 3
+const DASHBOARD_UPDATE_INTERVAL = 1
+const DOCK_ZONE_THRESHOLD = 2
+const ZONE_A_THRESHOLD = 5
+const ZONE_B_THRESHOLD = -5
+
+const ROBOT_COLORS = {
+  1: '#ff6b35',
+  2: '#f7931e',
+  3: '#00d9ff',
+  4: '#7209b7',
+} as const
+
+const SHELF_POSITIONS: [number, number, number][] = [
+  [8, 0, 0],
+  [8, 0, 3],
+  [8, 0, -3],
+  [-8, 0, 0],
+  [-8, 0, 3],
+  [-8, 0, -3],
+]
+
+type RobotTask = 'idle' | 'moving_to_shelf' | 'picking' | 'moving_to_dock' | 'delivering' | 'charging'
+
+interface RobotState {
+  position: THREE.Vector3
+  targetPosition: THREE.Vector3
+  task: RobotTask
+  speed: number
+  rotation: number
+  taskTimer: number
+  isAtTarget: boolean
+  battery: number
+  hasPickedUp: boolean
+  needsCharging: boolean
+}
+
+interface RobotProps {
+  position: [number, number, number]
+  id: number
+  color: string
   shelfPositions: [number, number, number][]
-}) {
+}
+
+function getLocationName(pos: THREE.Vector3): string {
+  const x = Math.round(pos.x)
+  const z = Math.round(pos.z)
+  
+  if (Math.abs(x) < DOCK_ZONE_THRESHOLD && Math.abs(z) < DOCK_ZONE_THRESHOLD) {
+    return 'Dock'
+  }
+  if (x > ZONE_A_THRESHOLD) return 'Zone A'
+  if (x < ZONE_B_THRESHOLD) return 'Zone B'
+  return 'Zone C'
+}
+
+function getRandomShelf(shelfPositions: [number, number, number][]): THREE.Vector3 {
+  const randomShelf = shelfPositions[Math.floor(Math.random() * shelfPositions.length)]
+  return new THREE.Vector3(randomShelf[0] - 2, 0, randomShelf[2])
+}
+
+function Robot({ position, id, color, shelfPositions }: RobotProps) {
   const ref = useRef<THREE.Group>(null)
   const { updateRobot, incrementOrders } = useWarehouse()
   
-  const stateRef = useRef({
+  const stateRef = useRef<RobotState>({
     position: new THREE.Vector3(...position),
     targetPosition: new THREE.Vector3(...position),
-    task: 'idle' as 'idle' | 'moving_to_shelf' | 'picking' | 'moving_to_dock' | 'delivering' | 'charging',
+    task: 'idle',
     speed: 0.8 + Math.random() * 0.4,
     rotation: 0,
     taskTimer: 0,
     isAtTarget: false,
-    battery: 70 + Math.random() * 30, // Start 70-100%
+    battery: 70 + Math.random() * 30,
     hasPickedUp: false,
     needsCharging: false,
   })
@@ -41,15 +99,6 @@ function Robot({
   const dockPosition = new THREE.Vector3(0, 0, 0)
   const lastUpdateTime = useRef(0)
   
-  const getLocationName = (pos: THREE.Vector3) => {
-    const x = Math.round(pos.x)
-    const z = Math.round(pos.z)
-    if (Math.abs(x) < 2 && Math.abs(z) < 2) return 'Dock'
-    if (x > 5) return 'Zone A'
-    if (x < -5) return 'Zone B'
-    return 'Zone C'
-  }
-  
   const updateDashboard = (task: string, location: string) => {
     updateRobot(id, {
       task,
@@ -59,14 +108,78 @@ function Robot({
     })
   }
   
+  const startChargingSequence = () => {
+    const robotState = stateRef.current
+    robotState.needsCharging = true
+    robotState.task = 'moving_to_dock'
+    robotState.targetPosition = dockPosition.clone()
+    robotState.isAtTarget = false
+    robotState.hasPickedUp = false
+    setVisualTask('LOW BATTERY - DOCKING')
+    setVisualColor('#ff0000')
+    setCargoColor('#333')
+    updateDashboard('Low Battery - Returning', getLocationName(robotState.position))
+  }
+  
+  const startPickingTask = () => {
+    const robotState = stateRef.current
+    robotState.task = 'picking'
+    setVisualTask('PICKING')
+    setVisualColor('#ffff00')
+    updateDashboard('Picking Items', getLocationName(robotState.position))
+  }
+  
+  const startDeliveringTask = () => {
+    const robotState = stateRef.current
+    robotState.task = 'delivering'
+    setVisualTask('DELIVERING')
+    setVisualColor('#00ff00')
+    updateDashboard('Delivering', 'Dock')
+  }
+  
+  const completePickingTask = () => {
+    const robotState = stateRef.current
+    robotState.hasPickedUp = true
+    robotState.task = 'moving_to_dock'
+    robotState.targetPosition = dockPosition.clone()
+    robotState.isAtTarget = false
+    setVisualTask('MOVING TO DOCK')
+    setVisualColor('#ff00ff')
+    setCargoColor('#ff6600')
+    updateDashboard('Returning to Dock', getLocationName(robotState.position))
+  }
+  
+  const completeDeliveringTask = () => {
+    const robotState = stateRef.current
+    incrementOrders()
+    robotState.hasPickedUp = false
+    robotState.task = 'moving_to_shelf'
+    robotState.targetPosition = getRandomShelf(shelfPositions)
+    robotState.isAtTarget = false
+    setVisualTask('MOVING TO SHELF')
+    setVisualColor(color)
+    setCargoColor('#333')
+    updateDashboard('Moving to Shelf', 'Dock')
+  }
+  
+  const resumeWorkAfterCharging = () => {
+    const robotState = stateRef.current
+    robotState.needsCharging = false
+    robotState.targetPosition = getRandomShelf(shelfPositions)
+    robotState.task = 'moving_to_shelf'
+    robotState.isAtTarget = false
+    setVisualTask('MOVING TO SHELF')
+    setVisualColor(color)
+    updateDashboard('Moving to Shelf', 'Dock')
+  }
+  
   useEffect(() => {
     if (!shelfPositions || shelfPositions.length === 0) return
     
-    // Initialize - go to first shelf
-    const randomShelf = shelfPositions[Math.floor(Math.random() * shelfPositions.length)]
-    stateRef.current.targetPosition = new THREE.Vector3(randomShelf[0] - 2, 0, randomShelf[2])
-    stateRef.current.task = 'moving_to_shelf'
-    stateRef.current.isAtTarget = false
+    const robotState = stateRef.current
+    robotState.targetPosition = getRandomShelf(shelfPositions)
+    robotState.task = 'moving_to_shelf'
+    robotState.isAtTarget = false
     setVisualTask('MOVING TO SHELF')
     setVisualColor(color)
     
@@ -80,27 +193,16 @@ function Robot({
     const distance = robotState.position.distanceTo(robotState.targetPosition)
     const now = state.clock.elapsedTime
     
-    // Drain battery when moving
     if (robotState.task === 'moving_to_shelf' || robotState.task === 'moving_to_dock') {
-      robotState.battery = Math.max(0, robotState.battery - delta * 1.5)
+      robotState.battery = Math.max(0, robotState.battery - delta * BATTERY_DRAIN_RATE)
     }
     
-    // Check if needs charging (PRIORITY CHECK)
-    if (robotState.battery < 10 && !robotState.needsCharging) {
-      robotState.needsCharging = true
-      robotState.task = 'moving_to_dock'
-      robotState.targetPosition = dockPosition.clone()
-      robotState.isAtTarget = false
-      robotState.hasPickedUp = false
-      setVisualTask('LOW BATTERY - DOCKING')
-      setVisualColor('#ff0000')
-      setCargoColor('#333')
-      updateDashboard('Low Battery - Returning', getLocationName(robotState.position))
+    if (robotState.battery < LOW_BATTERY_THRESHOLD && !robotState.needsCharging) {
+      startChargingSequence()
       return
     }
     
-    // CHARGING STATE
-    if (robotState.needsCharging && distance < 0.5 && robotState.task !== 'charging') {
+    if (robotState.needsCharging && distance < TARGET_DISTANCE_THRESHOLD && robotState.task !== 'charging') {
       robotState.task = 'charging'
       robotState.isAtTarget = true
       setVisualTask('CHARGING')
@@ -109,96 +211,52 @@ function Robot({
     }
     
     if (robotState.task === 'charging') {
-      robotState.battery = Math.min(100, robotState.battery + delta * 8) // Charge faster
+      robotState.battery = Math.min(100, robotState.battery + delta * BATTERY_CHARGE_RATE)
       
-      if (robotState.battery >= 95) {
-        // Fully charged, resume work
-        robotState.needsCharging = false
-        const randomShelf = shelfPositions[Math.floor(Math.random() * shelfPositions.length)]
-        robotState.targetPosition = new THREE.Vector3(randomShelf[0] - 2, 0, randomShelf[2])
-        robotState.task = 'moving_to_shelf'
-        robotState.isAtTarget = false
-        setVisualTask('MOVING TO SHELF')
-        setVisualColor(color)
-        updateDashboard('Moving to Shelf', 'Dock')
+      if (robotState.battery >= FULL_BATTERY_THRESHOLD) {
+        resumeWorkAfterCharging()
       }
-      return // Don't move while charging
+      return
     }
     
-    // REACHED TARGET
-    if (distance < 0.5 && !robotState.isAtTarget) {
+    if (distance < TARGET_DISTANCE_THRESHOLD && !robotState.isAtTarget) {
       robotState.isAtTarget = true
       robotState.taskTimer = 0
       
-      // STATE TRANSITIONS
       if (robotState.task === 'moving_to_shelf') {
-        // Start picking
-        robotState.task = 'picking'
-        setVisualTask('PICKING')
-        setVisualColor('#ffff00')
-        updateDashboard('Picking Items', getLocationName(robotState.position))
-        
+        startPickingTask()
       } else if (robotState.task === 'moving_to_dock' && robotState.hasPickedUp) {
-        // Start delivering
-        robotState.task = 'delivering'
-        setVisualTask('DELIVERING')
-        setVisualColor('#00ff00')
-        updateDashboard('Delivering', 'Dock')
+        startDeliveringTask()
       }
     }
     
-    // TIMED TASKS (picking and delivering)
     if (robotState.task === 'picking' || robotState.task === 'delivering') {
       robotState.taskTimer += delta
       
-      if (robotState.taskTimer >= 2) { // 2 seconds
+      if (robotState.taskTimer >= PICKING_DURATION) {
         if (robotState.task === 'picking') {
-          // Picked up, now deliver to dock
-          robotState.hasPickedUp = true
-          robotState.task = 'moving_to_dock'
-          robotState.targetPosition = dockPosition.clone()
-          robotState.isAtTarget = false
-          setVisualTask('MOVING TO DOCK')
-          setVisualColor('#ff00ff')
-          setCargoColor('#ff6600') // Show cargo
-          updateDashboard('Returning to Dock', getLocationName(robotState.position))
-          
+          completePickingTask()
         } else if (robotState.task === 'delivering') {
-          // Delivered! Complete order and get next shelf
-          incrementOrders()
-          robotState.hasPickedUp = false
-          
-          const randomShelf = shelfPositions[Math.floor(Math.random() * shelfPositions.length)]
-          robotState.task = 'moving_to_shelf'
-          robotState.targetPosition = new THREE.Vector3(randomShelf[0] - 2, 0, randomShelf[2])
-          robotState.isAtTarget = false
-          setVisualTask('MOVING TO SHELF')
-          setVisualColor(color)
-          setCargoColor('#333') // Empty cargo
-          updateDashboard('Moving to Shelf', 'Dock')
+          completeDeliveringTask()
         }
-        
         robotState.taskTimer = 0
       }
     }
     
-    // MOVEMENT LOGIC
     if (!robotState.isAtTarget && (robotState.task === 'moving_to_shelf' || robotState.task === 'moving_to_dock')) {
       const direction = new THREE.Vector3()
         .subVectors(robotState.targetPosition, robotState.position)
         .normalize()
       
-      const moveSpeed = robotState.speed * delta * 3
+      const moveSpeed = robotState.speed * delta * MOVEMENT_SPEED_MULTIPLIER
       robotState.position.addScaledVector(direction, moveSpeed)
       
-      const targetRotation = Math.atan2(direction.x, direction.z)
-      robotState.rotation = targetRotation
+      robotState.rotation = Math.atan2(direction.x, direction.z)
       
       ref.current.position.copy(robotState.position)
       ref.current.rotation.y = robotState.rotation
       
-      // Update location every second (not every frame!)
-      if (now - lastUpdateTime.current > 1) {
+      if (now - lastUpdateTime.current > DASHBOARD_UPDATE_INTERVAL) {
         updateDashboard(
           robotState.task === 'moving_to_shelf' ? 'Moving to Shelf' : 'Returning to Dock',
           getLocationName(robotState.position)
@@ -208,59 +266,87 @@ function Robot({
     }
   })
   
+  const isMoving = !stateRef.current.isAtTarget && 
+    (stateRef.current.task === 'moving_to_shelf' || stateRef.current.task === 'moving_to_dock')
+  
   return (
     <group ref={ref} position={position}>
-      <Box args={[0.8, 0.5, 1.2]} position={[0, 0.25, 0]}>
-        <meshStandardMaterial color={visualColor} metalness={0.6} roughness={0.4} />
-      </Box>
-      
-      <Sphere args={[0.15, 16, 16]} position={[0.3, 0.1, 0.4]}>
-        <meshStandardMaterial color="#222" />
-      </Sphere>
-      <Sphere args={[0.15, 16, 16]} position={[-0.3, 0.1, 0.4]}>
-        <meshStandardMaterial color="#222" />
-      </Sphere>
-      <Sphere args={[0.15, 16, 16]} position={[0.3, 0.1, -0.4]}>
-        <meshStandardMaterial color="#222" />
-      </Sphere>
-      <Sphere args={[0.15, 16, 16]} position={[-0.3, 0.1, -0.4]}>
-        <meshStandardMaterial color="#222" />
-      </Sphere>
-      
-      <Box args={[0.4, 0.6, 0.4]} position={[0, 0.8, 0]}>
-        <meshStandardMaterial color={cargoColor} />
-      </Box>
-      
-      <Text position={[0, 1.2, 0]} fontSize={0.3} color="white" anchorX="center">
-        R{id}
-      </Text>
-      
-      <Text position={[0, 1.5, 0]} fontSize={0.15} color="#00ff00" anchorX="center">
-        {visualTask}
-      </Text>
-      
-      {!stateRef.current.isAtTarget && (stateRef.current.task === 'moving_to_shelf' || stateRef.current.task === 'moving_to_dock') && (
-        <Line
-          points={[
-            [0, 0.1, 0],
-            [
-              stateRef.current.targetPosition.x - stateRef.current.position.x,
-              0.1,
-              stateRef.current.targetPosition.z - stateRef.current.position.z
-            ]
-          ]}
-          color="#00ffff"
-          lineWidth={2}
-          transparent
-          opacity={0.3}
-        />
-      )}
+      <RobotBody color={visualColor} />
+      <RobotWheels />
+      <RobotCargo color={cargoColor} />
+      <RobotLabels id={id} task={visualTask} />
+      {isMoving && <PathLine stateRef={stateRef} />}
     </group>
   )
 }
 
+function RobotBody({ color }: { color: string }) {
+  return (
+    <Box args={[0.8, 0.5, 1.2]} position={[0, 0.25, 0]}>
+      <meshStandardMaterial color={color} metalness={0.6} roughness={0.4} />
+    </Box>
+  )
+}
 
-// Keep Shelf and DockingStation components the same...
+function RobotWheels() {
+  const wheelPositions: [number, number, number][] = [
+    [0.3, 0.1, 0.4],
+    [-0.3, 0.1, 0.4],
+    [0.3, 0.1, -0.4],
+    [-0.3, 0.1, -0.4],
+  ]
+  
+  return (
+    <>
+      {wheelPositions.map((pos, i) => (
+        <Sphere key={i} args={[0.15, 16, 16]} position={pos}>
+          <meshStandardMaterial color="#222" />
+        </Sphere>
+      ))}
+    </>
+  )
+}
+
+function RobotCargo({ color }: { color: string }) {
+  return (
+    <Box args={[0.4, 0.6, 0.4]} position={[0, 0.8, 0]}>
+      <meshStandardMaterial color={color} />
+    </Box>
+  )
+}
+
+function RobotLabels({ id, task }: { id: number; task: string }) {
+  return (
+    <>
+      <Text position={[0, 1.2, 0]} fontSize={0.3} color="white" anchorX="center">
+        R{id}
+      </Text>
+      <Text position={[0, 1.5, 0]} fontSize={0.15} color="#00ff00" anchorX="center">
+        {task}
+      </Text>
+    </>
+  )
+}
+
+function PathLine({ stateRef }: { stateRef: React.MutableRefObject<RobotState> }) {
+  return (
+    <Line
+      points={[
+        [0, 0.1, 0],
+        [
+          stateRef.current.targetPosition.x - stateRef.current.position.x,
+          0.1,
+          stateRef.current.targetPosition.z - stateRef.current.position.z
+        ]
+      ]}
+      color="#00ffff"
+      lineWidth={2}
+      transparent
+      opacity={0.3}
+    />
+  )
+}
+
 function Shelf({ position }: { position: [number, number, number] }) {
   return (
     <group position={position}>
@@ -281,23 +367,23 @@ function Shelf({ position }: { position: [number, number, number] }) {
 }
 
 function DockingStation({ position }: { position: [number, number, number] }) {
+  const postPositions: [number, number, number][] = [
+    [1.2, 0.5, 1.2],
+    [-1.2, 0.5, 1.2],
+    [1.2, 0.5, -1.2],
+    [-1.2, 0.5, -1.2],
+  ]
+  
   return (
     <group position={position}>
       <Box args={[3, 0.1, 3]} position={[0, 0.05, 0]}>
         <meshStandardMaterial color="#222222" metalness={0.8} roughness={0.2} />
       </Box>
-      <Box args={[0.2, 1, 0.2]} position={[1.2, 0.5, 1.2]}>
-        <meshStandardMaterial color="#444" />
-      </Box>
-      <Box args={[0.2, 1, 0.2]} position={[-1.2, 0.5, 1.2]}>
-        <meshStandardMaterial color="#444" />
-      </Box>
-      <Box args={[0.2, 1, 0.2]} position={[1.2, 0.5, -1.2]}>
-        <meshStandardMaterial color="#444" />
-      </Box>
-      <Box args={[0.2, 1, 0.2]} position={[-1.2, 0.5, -1.2]}>
-        <meshStandardMaterial color="#444" />
-      </Box>
+      {postPositions.map((pos, i) => (
+        <Box key={i} args={[0.2, 1, 0.2]} position={pos}>
+          <meshStandardMaterial color="#444" />
+        </Box>
+      ))}
       <Text position={[0, 1.5, 0]} fontSize={0.4} color="#00ff00" anchorX="center">
         DOCK
       </Text>
@@ -306,15 +392,6 @@ function DockingStation({ position }: { position: [number, number, number] }) {
 }
 
 export default function WarehouseScene() {
-  const shelfPositions: [number, number, number][] = [
-    [8, 0, 0],
-    [8, 0, 3],
-    [8, 0, -3],
-    [-8, 0, 0],
-    [-8, 0, 3],
-    [-8, 0, -3],
-  ]
-  
   return (
     <div className="w-full h-full">
       <Canvas 
@@ -324,16 +401,7 @@ export default function WarehouseScene() {
       >
         <color attach="background" args={['#0a0a0a']} />
         
-        <ambientLight intensity={0.4} />
-        <directionalLight 
-          position={[10, 20, 10]} 
-          intensity={1} 
-          castShadow
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
-        />
-        <pointLight position={[-10, 10, -10]} intensity={0.5} color="#4080ff" />
-        <spotLight position={[0, 10, 0]} intensity={0.3} color="#00ff00" angle={0.3} />
+        <SceneLighting />
         
         <Grid 
           args={[20, 20]} 
@@ -345,12 +413,12 @@ export default function WarehouseScene() {
         
         <DockingStation position={[0, 0, 0]} />
         
-        <Robot position={[2, 0, 2]} id={1} color="#ff6b35" shelfPositions={shelfPositions} />
-        <Robot position={[-2, 0, 2]} id={2} color="#f7931e" shelfPositions={shelfPositions} />
-        <Robot position={[2, 0, -2]} id={3} color="#00d9ff" shelfPositions={shelfPositions} />
-        <Robot position={[-2, 0, -2]} id={4} color="#7209b7" shelfPositions={shelfPositions} />
+        <Robot position={[2, 0, 2]} id={1} color={ROBOT_COLORS[1]} shelfPositions={SHELF_POSITIONS} />
+        <Robot position={[-2, 0, 2]} id={2} color={ROBOT_COLORS[2]} shelfPositions={SHELF_POSITIONS} />
+        <Robot position={[2, 0, -2]} id={3} color={ROBOT_COLORS[3]} shelfPositions={SHELF_POSITIONS} />
+        <Robot position={[-2, 0, -2]} id={4} color={ROBOT_COLORS[4]} shelfPositions={SHELF_POSITIONS} />
         
-        {shelfPositions.map((pos, i) => (
+        {SHELF_POSITIONS.map((pos, i) => (
           <Shelf key={i} position={pos} />
         ))}
         
@@ -363,5 +431,22 @@ export default function WarehouseScene() {
         />
       </Canvas>
     </div>
+  )
+}
+
+function SceneLighting() {
+  return (
+    <>
+      <ambientLight intensity={0.4} />
+      <directionalLight 
+        position={[10, 20, 10]} 
+        intensity={1} 
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+      />
+      <pointLight position={[-10, 10, -10]} intensity={0.5} color="#4080ff" />
+      <spotLight position={[0, 10, 0]} intensity={0.3} color="#00ff00" angle={0.3} />
+    </>
   )
 }
