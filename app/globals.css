@@ -14,7 +14,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
+    --background: #262626;
     --foreground: #ededed;
   }
 }
@@ -27,7 +27,6 @@ body {
   padding: 0; 
 }
 
-/* Remove default spacing from Three.js Canvas */
 canvas {
   display: block !important;
   margin: 0 !important;

@@ -8,7 +8,7 @@ export default function Home() {
   return (
     <WarehouseProvider>
       <Navbar />
-      <main className="min-h-screen relative text-white pt-20 p-6 overflow-hidden"> {/* Added pt-20 for navbar spacing */}
+      <main className="min-h-screen relative text-white pt-20 p-6 overflow-hidden">
         {/* Grid Background */}
         <div 
           className="fixed inset-0 -z-10 opacity-30"
@@ -49,7 +49,7 @@ export default function Home() {
           </div>
           
           <div className="mt-6 text-center text-gray-500 text-sm">
-            Built with Next.js, React, Three.js & Tailwind CSS | Demo by Dénes Kosztyuk
+            Built with Next.js, React, Three.js & Tailwind CSS | Demo by Den Kosztyuk
           </div>
         </div>
       </main>
