@@ -1,6 +1,5 @@
 # Warehouse Robotics Dashboard
-## Live Demo
-[View Live Demo]([https://your-vercel-url.vercel.app](https://warehouse-dashboard-rust.vercel.app/))
+## [View Live Demo]([https://your-vercel-url.vercel.app](https://warehouse-dashboard-rust.vercel.app/))
 
 Real-time 3D warehouse automation monitoring system built with Next.js, React Three Fiber, and Tailwind CSS.
 
