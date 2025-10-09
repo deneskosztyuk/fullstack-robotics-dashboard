@@ -28,7 +28,7 @@ export default function Home() {
         
         <div className="max-w-[1800px] mx-auto relative z-10 pt-6">
           <div className="mb-6 text-center">
-            <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+            <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-100 to-cyan-100 bg-clip-text text-transparent">
               Warehouse Robotics Control Dashboard
             </h1>
             <p className="text-gray-400">Real-time 3D warehouse monitoring system</p>
