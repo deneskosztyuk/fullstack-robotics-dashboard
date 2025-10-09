@@ -1,5 +1,6 @@
 import WarehouseScene from '@/components/WarehouseScene'
-import Dashboard from '@/components/Dashboard'
+import { DashboardLeft } from '@/components/DashboardLeft'
+import { DashboardRight } from '@/components/DashboardRight'
 import { WarehouseProvider } from '@/lib/WarehouseContext'
 
 export default function Home() {
@@ -27,23 +28,32 @@ export default function Home() {
           }}
         />
         
-        <div className="max-w-7xl mx-auto relative z-10">
-          <div className="mb-8 text-center">
+        <div className="max-w-[1800px] mx-auto relative z-10">
+          <div className="mb-6 text-center">
             <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
               Warehouse Robotics Control Dashboard
             </h1>
             <p className="text-gray-400">Real-time 3D warehouse monitoring system</p>
           </div>
           
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-gray-800/50 backdrop-blur rounded-xl shadow-2xl border border-gray-700 overflow-hidden" style={{ height: '600px' }}>
+          {/* THREE-COLUMN COMMAND CENTER LAYOUT */}
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+            
+            {/* LEFT DASHBOARD */}
+            <div className="xl:col-span-3 bg-gray-800/50 backdrop-blur rounded-xl shadow-2xl border border-gray-700 overflow-hidden" style={{ height: '700px' }}>
+              <DashboardLeft />
+            </div>
+            
+            {/* CENTER - 3D SCENE */}
+            <div className="xl:col-span-6 bg-gray-800/50 backdrop-blur rounded-xl shadow-2xl border border-gray-700 overflow-hidden" style={{ height: '700px' }}>
               <WarehouseScene />
             </div>
             
-            {/* CHANGED: Remove padding, handle it inside Dashboard */}
-            <div className="bg-gray-800/50 backdrop-blur rounded-xl shadow-2xl border border-gray-700 overflow-hidden relative" style={{ height: '600px' }}>
-              <Dashboard />
+            {/* RIGHT DASHBOARD */}
+            <div className="xl:col-span-3 bg-gray-800/50 backdrop-blur rounded-xl shadow-2xl border border-gray-700 overflow-hidden" style={{ height: '700px' }}>
+              <DashboardRight />
             </div>
+            
           </div>
           
           <div className="mt-6 text-center text-gray-500 text-sm">

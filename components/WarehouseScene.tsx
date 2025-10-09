@@ -316,7 +316,7 @@ export default function WarehouseScene() {
   ]
   
   return (
-    <div className="w-full" style={{ height: '600px', display: 'block' }}>
+    <div className="w-full h-full">
       <Canvas 
         camera={{ position: [15, 15, 15], fov: 50 }} 
         shadows
