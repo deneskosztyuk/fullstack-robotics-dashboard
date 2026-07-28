@@ -1,11 +1,25 @@
 'use client'
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react'
 
 const EFFICIENCY_CALCULATION_INTERVAL = 2000
 const EFFICIENCY_HISTORY_LENGTH = 7
 const INITIAL_COMPLETED_ORDERS = 247
-const TOTAL_ROBOTS = 4
+const MAX_EVENTS = 50
+const THROUGHPUT_WINDOW_MS = 60000
+const MAX_CYCLE_TIME_SAMPLES = 20
+
+export type EventSeverity = 'warning' | 'info' | 'error'
+export type EventKind = 'alert' | 'activity'
+
+export interface WarehouseEvent {
+  id: number
+  kind: EventKind
+  severity: EventSeverity
+  robot?: number
+  message: string
+  timestamp: number
+}
 
 export interface RobotData {
   id: number
@@ -13,20 +27,27 @@ export interface RobotData {
   task: string
   battery: number
   location: string
-  speed: number
 }
 
 interface Stats {
   completedOrders: number
-  activeRobots: number
 }
 
 interface WarehouseContextType {
   robots: RobotData[]
   updateRobot: (id: number, data: Partial<RobotData>) => void
   stats: Stats
-  incrementOrders: () => void
+  incrementOrders: () => number
   efficiencyHistory: number[]
+  events: WarehouseEvent[]
+  logEvent: (event: Omit<WarehouseEvent, 'id' | 'timestamp'>) => void
+  paused: boolean
+  togglePause: () => void
+  resetCounter: number
+  reset: () => void
+  throughput: number
+  avgCycleTime: number
+  recordCycleTime: (durationSec: number) => void
 }
 
 interface WarehouseProviderProps {
@@ -34,13 +55,16 @@ interface WarehouseProviderProps {
 }
 
 const INITIAL_ROBOTS: RobotData[] = [
-  { id: 1, status: 'active', task: 'Idle', battery: 87, location: 'Dock', speed: 1.2 },
-  { id: 2, status: 'active', task: 'Idle', battery: 92, location: 'Dock', speed: 0.8 },
-  { id: 3, status: 'active', task: 'Idle', battery: 78, location: 'Dock', speed: 1.5 },
-  { id: 4, status: 'active', task: 'Idle', battery: 65, location: 'Dock', speed: 1.0 },
+  { id: 1, status: 'active', task: 'Idle', battery: 87, location: 'Dock' },
+  { id: 2, status: 'active', task: 'Idle', battery: 92, location: 'Dock' },
+  { id: 3, status: 'active', task: 'Idle', battery: 78, location: 'Dock' },
+  { id: 4, status: 'active', task: 'Idle', battery: 65, location: 'Dock' },
 ]
 
-const INITIAL_EFFICIENCY_HISTORY: number[] = [85, 88, 90, 87, 92, 89, 91]
+const INITIAL_EFFICIENCY_HISTORY: number[] = Array.from(
+  { length: EFFICIENCY_HISTORY_LENGTH },
+  () => calculateFleetEfficiency(INITIAL_ROBOTS)
+)
 
 const WarehouseContext = createContext<WarehouseContextType | undefined>(undefined)
 
@@ -58,36 +82,99 @@ function calculateFleetEfficiency(robots: RobotData[]): number {
 export function WarehouseProvider({ children }: WarehouseProviderProps) {
   const [robots, setRobots] = useState<RobotData[]>(INITIAL_ROBOTS)
   const [stats, setStats] = useState<Stats>({
-    completedOrders: INITIAL_COMPLETED_ORDERS,
-    activeRobots: TOTAL_ROBOTS
+    completedOrders: INITIAL_COMPLETED_ORDERS
   })
+  const completedOrdersRef = useRef(INITIAL_COMPLETED_ORDERS)
+  const orderTimestampsRef = useRef<number[]>([])
+  const cycleTimesRef = useRef<number[]>([])
   const [efficiencyHistory, setEfficiencyHistory] = useState<number[]>(INITIAL_EFFICIENCY_HISTORY)
+  const [events, setEvents] = useState<WarehouseEvent[]>([])
+  const eventIdRef = useRef(0)
+  const [paused, setPaused] = useState(false)
+  const [resetCounter, setResetCounter] = useState(0)
+  const [throughput, setThroughput] = useState(0)
+  const [avgCycleTime, setAvgCycleTime] = useState(0)
 
-  const updateRobot = (id: number, data: Partial<RobotData>) => {
+  const robotsRef = useRef(robots)
+  useEffect(() => {
+    robotsRef.current = robots
+  }, [robots])
+
+  const pausedRef = useRef(false)
+  useEffect(() => {
+    pausedRef.current = paused
+  }, [paused])
+
+  const updateRobot = useCallback((id: number, data: Partial<RobotData>) => {
     setRobots(prev => prev.map(robot => 
       robot.id === id ? { ...robot, ...data } : robot
     ))
-  }
+  }, [])
 
-  const incrementOrders = () => {
+  const incrementOrders = useCallback(() => {
+    completedOrdersRef.current += 1
+    const newCount = completedOrdersRef.current
+    orderTimestampsRef.current.push(Date.now())
     setStats(prev => ({ 
       ...prev, 
-      completedOrders: prev.completedOrders + 1 
+      completedOrders: newCount 
     }))
-  }
+    return newCount
+  }, [])
+
+  const recordCycleTime = useCallback((durationSec: number) => {
+    cycleTimesRef.current.push(durationSec)
+    if (cycleTimesRef.current.length > MAX_CYCLE_TIME_SAMPLES) {
+      cycleTimesRef.current.shift()
+    }
+  }, [])
+
+  const logEvent = useCallback((event: Omit<WarehouseEvent, 'id' | 'timestamp'>) => {
+    const id = eventIdRef.current++
+    const fullEvent: WarehouseEvent = {
+      ...event,
+      id,
+      timestamp: Date.now(),
+    }
+    setEvents(prev => [...prev, fullEvent].slice(-MAX_EVENTS))
+  }, [])
+
+  const togglePause = useCallback(() => {
+    setPaused(p => !p)
+  }, [])
+
+  const reset = useCallback(() => {
+    setPaused(false)
+    setResetCounter(c => c + 1)
+    setRobots(INITIAL_ROBOTS)
+    completedOrdersRef.current = INITIAL_COMPLETED_ORDERS
+    orderTimestampsRef.current = []
+    cycleTimesRef.current = []
+    setStats({ completedOrders: INITIAL_COMPLETED_ORDERS })
+    setEvents([])
+    setEfficiencyHistory(INITIAL_EFFICIENCY_HISTORY)
+    setThroughput(0)
+    setAvgCycleTime(0)
+  }, [])
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setRobots(currentRobots => {
-        const efficiency = calculateFleetEfficiency(currentRobots)
-        
-        setEfficiencyHistory(prev => {
-          const newHistory = [...prev.slice(-(EFFICIENCY_HISTORY_LENGTH - 1)), efficiency]
-          return newHistory
-        })
-        
-        return currentRobots
-      })
+      if (pausedRef.current) return
+      const efficiency = calculateFleetEfficiency(robotsRef.current)
+      setEfficiencyHistory(prev => [
+        ...prev.slice(-(EFFICIENCY_HISTORY_LENGTH - 1)),
+        efficiency,
+      ])
+
+      const now = Date.now()
+      orderTimestampsRef.current = orderTimestampsRef.current.filter(t => now - t <= THROUGHPUT_WINDOW_MS)
+      setThroughput(orderTimestampsRef.current.length)
+
+      const cycles = cycleTimesRef.current
+      if (cycles.length > 0) {
+        const avg = cycles.reduce((sum, c) => sum + c, 0) / cycles.length
+        setAvgCycleTime(avg)
+      }
     }, EFFICIENCY_CALCULATION_INTERVAL)
     
     return () => clearInterval(interval)
@@ -98,7 +185,16 @@ export function WarehouseProvider({ children }: WarehouseProviderProps) {
     updateRobot,
     stats,
     incrementOrders,
-    efficiencyHistory
+    efficiencyHistory,
+    events,
+    logEvent,
+    paused,
+    togglePause,
+    resetCounter,
+    reset,
+    throughput,
+    avgCycleTime,
+    recordCycleTime
   }
 
   return (

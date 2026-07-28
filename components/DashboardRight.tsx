@@ -1,32 +1,19 @@
 'use client'
 
-import { useState } from 'react'
-import { useWarehouse } from '@/lib/WarehouseContext'
+import { useState, useEffect } from 'react'
+import { useWarehouse, WarehouseEvent } from '@/lib/WarehouseContext'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { Button } from '@/components/ui/button'
 
 const BATTERY_HIGH_THRESHOLD = 70
 const BATTERY_MEDIUM_THRESHOLD = 40
 const MAX_DISPLAYED_ALERTS = 3
-
-interface Alert {
-  id: number
-  type: 'warning' | 'info' | 'error'
-  message: string
-  time: string
-}
-
-interface Activity {
-  id: number
-  robot: number
-  action: string
-  time: string
-}
-
-interface StatusBadgeProps {
-  status: string
-}
+const MAX_DISPLAYED_ACTIVITIES = 4
+const RELATIVE_TIME_TICK_MS = 1000
 
 interface AlertItemProps {
-  alert: Alert
+  alert: WarehouseEvent
+  now: number
 }
 
 interface RobotCardProps {
@@ -40,209 +27,203 @@ interface RobotCardProps {
 }
 
 interface ActivityItemProps {
-  activity: Activity
+  activity: WarehouseEvent
+  now: number
 }
 
-const STATUS_STYLES = {
-  active: 'bg-green-600 text-white',
-  charging: 'bg-yellow-600 text-white',
-  idle: 'bg-gray-600 text-white',
-  error: 'bg-red-600 text-white',
+const ALERT_BORDER = {
+  warning: 'border-warning',
+  info: 'border-primary',
+  error: 'border-destructive',
 }
 
-const ALERT_STYLES = {
-  warning: 'bg-yellow-900/30 border-yellow-600/50 text-yellow-200',
-  info: 'bg-blue-900/30 border-blue-600/50 text-blue-200',
-  error: 'bg-red-900/30 border-red-600/50 text-red-200',
+const ALERT_TEXT = {
+  warning: 'text-warning',
+  info: 'text-primary',
+  error: 'text-destructive',
 }
 
-const ALERT_ICONS = {
-  warning: '⚠️',
-  info: 'ℹ️',
-  error: '❌',
+function formatRelativeTime(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000))
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
 }
-
-const INITIAL_ALERTS: Alert[] = [
-  { id: 1, type: 'info', message: 'System running optimally', time: '2 min ago' },
-  { id: 2, type: 'warning', message: 'Robot #4 battery below 70%', time: '5 min ago' },
-  { id: 3, type: 'info', message: 'Peak hours starting soon', time: '12 min ago' },
-]
-
-const INITIAL_ACTIVITIES: Activity[] = [
-  { id: 1, robot: 1, action: 'Completed order #2891', time: '30s ago' },
-  { id: 2, robot: 3, action: 'Started picking task', time: '1m ago' },
-  { id: 3, robot: 2, action: 'Returned to dock', time: '2m ago' },
-  { id: 4, robot: 1, action: 'Transport initiated', time: '3m ago' },
-]
 
 export function DashboardRight() {
-  const { robots } = useWarehouse()
-  const [alerts] = useState<Alert[]>(INITIAL_ALERTS)
-  const [activities] = useState<Activity[]>(INITIAL_ACTIVITIES)
-  
-  const handlePause = () => {
-    // TODO: Implement pause logic
-  }
-  
-  const handleReset = () => {
-    // TODO: Implement reset logic
-  }
-  
+  const { robots, events, stats, efficiencyHistory, paused, togglePause, reset } = useWarehouse()
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), RELATIVE_TIME_TICK_MS)
+    return () => clearInterval(timer)
+  }, [])
+
+  const alerts = events
+    .filter(e => e.kind === 'alert')
+    .slice(-MAX_DISPLAYED_ALERTS)
+    .reverse()
+  const activities = events
+    .filter(e => e.kind === 'activity')
+    .slice(-MAX_DISPLAYED_ACTIVITIES)
+    .reverse()
+
   const handleGenerateReport = () => {
-    // TODO: Implement report generation logic
+    const report = {
+      generatedAt: new Date().toISOString(),
+      stats,
+      robots,
+      efficiencyHistory,
+      recentEvents: events.slice(-10),
+    }
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `warehouse-report-${Date.now()}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
-  
+
   return (
-    <div className="h-full overflow-y-auto px-4 pt-4 pb-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
-      
+    <div className="h-full overflow-y-auto px-4 pt-4 pb-4 space-y-4">
+
       <section>
-        <h3 className="font-semibold mb-2 text-gray-200 text-sm flex items-center gap-2">
-          <span className="text-yellow-400">⚠️</span>
+        <h3 className="font-semibold mb-2 text-foreground text-sm">
           System Alerts
         </h3>
         <div className="space-y-1">
-          {alerts.slice(0, MAX_DISPLAYED_ALERTS).map(alert => (
-            <AlertItem key={alert.id} alert={alert} />
-          ))}
+          {alerts.length === 0 ? (
+            <div className="p-2 rounded border text-xs border-border text-muted-foreground bg-muted/30">
+              No alerts
+            </div>
+          ) : (
+            alerts.map(alert => (
+              <AlertItem key={alert.id} alert={alert} now={now} />
+            ))
+          )}
         </div>
       </section>
-      
+
       <section>
-        <h3 className="font-semibold mb-2 text-gray-200 text-sm">Robot Fleet Status</h3>
+        <h3 className="font-semibold mb-2 text-foreground text-sm">Robot Fleet Status</h3>
         <div className="space-y-1.5">
           {robots.map(robot => (
             <RobotCard key={robot.id} robot={robot} />
           ))}
         </div>
       </section>
-      
+
       <section>
-        <h3 className="font-semibold mb-2 text-gray-200 text-sm">Recent Activity</h3>
+        <h3 className="font-semibold mb-2 text-foreground text-sm">Recent Activity</h3>
         <div className="space-y-1 text-xs">
-          {activities.map(activity => (
-            <ActivityItem key={activity.id} activity={activity} />
-          ))}
+          {activities.length === 0 ? (
+            <div className="p-2 rounded text-muted-foreground bg-muted/30">
+              No recent activity
+            </div>
+          ) : (
+            activities.map(activity => (
+              <ActivityItem key={activity.id} activity={activity} now={now} />
+            ))
+          )}
         </div>
       </section>
-      
-      <ControlButtons 
-        onPause={handlePause}
-        onReset={handleReset}
+
+      <ControlButtons
+        onPause={togglePause}
+        onReset={reset}
         onGenerateReport={handleGenerateReport}
+        paused={paused}
       />
-      
+
     </div>
   )
 }
 
 function RobotCard({ robot }: RobotCardProps) {
   const getBatteryColor = (battery: number) => {
-    if (battery > BATTERY_HIGH_THRESHOLD) return 'bg-gradient-to-r from-green-400 to-green-500'
-    if (battery > BATTERY_MEDIUM_THRESHOLD) return 'bg-gradient-to-r from-yellow-400 to-yellow-500'
-    return 'bg-gradient-to-r from-red-400 to-red-500'
+    if (battery > BATTERY_HIGH_THRESHOLD) return 'bg-success'
+    if (battery > BATTERY_MEDIUM_THRESHOLD) return 'bg-warning'
+    return 'bg-destructive'
   }
-  
+
   return (
-    <div className="bg-gray-700/40 p-2.5 rounded-lg border border-gray-600/50 hover:border-blue-500/50 transition-colors">
+    <div className="bg-muted/30 p-2.5 rounded-lg border border-border hover:border-primary/50 transition-colors">
       <div className="flex justify-between items-center mb-1.5">
-        <span className="font-semibold text-white text-sm">Robot #{robot.id}</span>
+        <span className="font-semibold text-foreground text-sm">Robot #{robot.id}</span>
         <StatusBadge status={robot.status} />
       </div>
-      <div className="text-xs text-gray-400 mb-1 flex justify-between">
+      <div className="text-xs text-muted-foreground mb-1 flex justify-between">
         <span>{robot.task}</span>
         <span>{robot.location}</span>
       </div>
       <div className="flex items-center gap-2">
-        <div className="flex-1 bg-gray-600 rounded-full h-1.5">
-          <div 
+        <div className="flex-1 bg-muted rounded-full h-1.5">
+          <div
             className={`h-1.5 rounded-full transition-all ${getBatteryColor(robot.battery)}`}
             style={{ width: `${robot.battery}%` }}
           />
         </div>
-        <span className="text-xs text-gray-400 w-10">{robot.battery}%</span>
+        <span className="text-xs text-muted-foreground w-10">{robot.battery}%</span>
       </div>
     </div>
   )
 }
 
-function ActivityItem({ activity }: ActivityItemProps) {
+function ActivityItem({ activity, now }: ActivityItemProps) {
   return (
-    <div className="bg-gray-800/40 p-2 rounded flex justify-between items-center">
+    <div className="bg-muted/30 p-2 rounded flex justify-between items-center">
       <div>
-        <span className="text-blue-400 font-semibold">R{activity.robot}</span>
-        <span className="text-gray-300 ml-2">{activity.action}</span>
+        <span className="text-primary font-semibold">R{activity.robot}</span>
+        <span className="text-foreground ml-2">{activity.message}</span>
       </div>
-      <span className="text-gray-500 text-xs">{activity.time}</span>
+      <span className="text-muted-foreground text-xs">{formatRelativeTime(activity.timestamp, now)}</span>
     </div>
   )
 }
 
-function ControlButtons({ 
-  onPause, 
-  onReset, 
-  onGenerateReport 
-}: { 
+function ControlButtons({
+  onPause,
+  onReset,
+  onGenerateReport,
+  paused
+}: {
   onPause: () => void
   onReset: () => void
   onGenerateReport: () => void
+  paused: boolean
 }) {
   return (
-    <section className="pt-4 border-t border-gray-700">
+    <section className="pt-4 border-t border-border">
       <div className="grid grid-cols-2 gap-3">
-        <button 
-          onClick={onPause}
-          className="group relative bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 hover:border-blue-400/60 text-blue-100 py-3 px-4 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg hover:shadow-blue-500/30 backdrop-blur"
-        >
-          <div className="flex items-center justify-center gap-2">
-            <span className="text-lg group-hover:scale-110 transition-transform">⏸️</span>
-            <span>Pause</span>
-          </div>
-          <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-blue-500/0 via-blue-400/10 to-blue-500/0 opacity-0 group-hover:opacity-100 transition-opacity" />
-        </button>
-        
-        <button 
-          onClick={onReset}
-          className="group relative bg-gray-600/20 hover:bg-gray-600/30 border border-gray-500/40 hover:border-gray-400/60 text-gray-100 py-3 px-4 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg hover:shadow-gray-500/30 backdrop-blur"
-        >
-          <div className="flex items-center justify-center gap-2">
-            <span className="text-lg group-hover:rotate-180 transition-transform duration-500">🔄</span>
-            <span>Reset</span>
-          </div>
-          <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-gray-500/0 via-gray-400/10 to-gray-500/0 opacity-0 group-hover:opacity-100 transition-opacity" />
-        </button>
+        <Button variant="outline" onClick={onPause} className="w-full">
+          {paused ? 'Resume' : 'Pause'}
+        </Button>
+        <Button variant="secondary" onClick={onReset} className="w-full">
+          Reset
+        </Button>
       </div>
-      
-      <button 
-        onClick={onGenerateReport}
-        className="group relative w-full mt-3 bg-gradient-to-r from-purple-600/30 to-pink-600/30 hover:from-purple-600/40 hover:to-pink-600/40 border border-purple-500/50 hover:border-purple-400/70 text-white py-3 px-4 rounded-xl font-semibold text-sm transition-all duration-300 shadow-lg hover:shadow-purple-500/40 backdrop-blur overflow-hidden"
-      >
-        <div className="relative z-10 flex items-center justify-center gap-2">
-          <span className="text-lg group-hover:scale-110 transition-transform">📊</span>
-          <span>Generate Report</span>
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-purple-600/20 via-pink-600/20 to-purple-600/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-      </button>
+      <Button variant="default" onClick={onGenerateReport} className="w-full mt-3">
+        Generate Report
+      </Button>
     </section>
   )
 }
 
-function StatusBadge({ status }: StatusBadgeProps) {
+function AlertItem({ alert, now }: AlertItemProps) {
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-semibold ${STATUS_STYLES[status as keyof typeof STATUS_STYLES] || STATUS_STYLES.idle}`}>
-      {status.toUpperCase()}
-    </span>
-  )
-}
-
-function AlertItem({ alert }: AlertItemProps) {
-  return (
-    <div className={`p-2 rounded border text-xs ${ALERT_STYLES[alert.type]}`}>
+    <div className={`p-2 rounded border text-xs ${ALERT_BORDER[alert.severity]}`}>
       <div className="flex items-start gap-2">
-        <span>{ALERT_ICONS[alert.type]}</span>
+        <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${ALERT_TEXT[alert.severity].replace('text-', 'bg-')}`} />
         <div className="flex-1">
-          <div className="font-medium">{alert.message}</div>
-          <div className="text-xs opacity-70 mt-0.5">{alert.time}</div>
+          <div className={`font-medium ${ALERT_TEXT[alert.severity]}`}>{alert.message}</div>
+          <div className="text-xs text-muted-foreground mt-0.5">{formatRelativeTime(alert.timestamp, now)}</div>
         </div>
       </div>
     </div>
