@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { useWarehouse, WarehouseEvent } from '@/lib/WarehouseContext'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
+import { Download, Minus, Pause, Play, Plus, RotateCcw } from 'lucide-react'
+import type { LayoutId, SimulationSpeed } from '@/lib/nav'
 
 const BATTERY_HIGH_THRESHOLD = 70
 const BATTERY_MEDIUM_THRESHOLD = 40
@@ -55,7 +57,25 @@ function formatRelativeTime(timestamp: number, now: number): string {
 }
 
 export function DashboardRight() {
-  const { robots, events, stats, efficiencyHistory, paused, togglePause, reset } = useWarehouse()
+  const {
+    robots,
+    events,
+    stats,
+    efficiencyHistory,
+    paused,
+    togglePause,
+    reset,
+    robotCount,
+    actualRobotCount,
+    maxRobotCount,
+    canAddRobot,
+    setRobotCount,
+    layout,
+    layouts,
+    setLayout,
+    speed,
+    setSpeed,
+  } = useWarehouse()
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -78,6 +98,12 @@ export function DashboardRight() {
       stats,
       robots,
       efficiencyHistory,
+      simulation: {
+        layout,
+        speed,
+        desiredRobotCount: robotCount,
+        actualRobotCount,
+      },
       recentEvents: events.slice(-10),
     }
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
@@ -93,6 +119,19 @@ export function DashboardRight() {
 
   return (
     <div className="h-full overflow-y-auto px-4 pt-4 pb-4 space-y-4">
+
+      <FleetControls
+        robotCount={robotCount}
+        actualRobotCount={actualRobotCount}
+        maxRobotCount={maxRobotCount}
+        canAddRobot={canAddRobot}
+        onRobotCountChange={setRobotCount}
+        layout={layout}
+        layouts={layouts}
+        onLayoutChange={setLayout}
+        speed={speed}
+        onSpeedChange={setSpeed}
+      />
 
       <section>
         <h3 className="font-semibold mb-2 text-foreground text-sm">
@@ -143,6 +182,105 @@ export function DashboardRight() {
       />
 
     </div>
+  )
+}
+
+function FleetControls({
+  robotCount,
+  actualRobotCount,
+  maxRobotCount,
+  canAddRobot,
+  onRobotCountChange,
+  layout,
+  layouts,
+  onLayoutChange,
+  speed,
+  onSpeedChange,
+}: {
+  robotCount: number
+  actualRobotCount: number
+  maxRobotCount: number
+  canAddRobot: boolean
+  onRobotCountChange: (count: number) => void
+  layout: LayoutId
+  layouts: readonly { id: LayoutId; name: string }[]
+  onLayoutChange: (layout: LayoutId) => void
+  speed: SimulationSpeed
+  onSpeedChange: (speed: SimulationSpeed) => void
+}) {
+  const speeds: readonly SimulationSpeed[] = [0.5, 1, 2]
+
+  return (
+    <section>
+      <h3 className="font-semibold mb-2 text-foreground text-sm">Fleet Controls</h3>
+      <div className="space-y-3 bg-muted/30 border border-border rounded-lg p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-medium text-foreground">Robots</div>
+            <div className="text-xs text-muted-foreground">
+              {actualRobotCount === robotCount
+                ? `${actualRobotCount} active`
+                : `${actualRobotCount} active · target ${robotCount}`}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => onRobotCountChange(robotCount - 1)}
+              disabled={robotCount <= 1}
+              aria-label="Remove robot"
+              title="Remove robot"
+            >
+              <Minus />
+            </Button>
+            <output className="w-8 text-center text-sm font-semibold tabular-nums">
+              {robotCount}
+            </output>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => onRobotCountChange(robotCount + 1)}
+              disabled={robotCount >= maxRobotCount || !canAddRobot}
+              aria-label="Add robot"
+              title="Add robot"
+            >
+              <Plus />
+            </Button>
+          </div>
+        </div>
+
+        <label className="block">
+          <span className="block text-xs font-medium text-foreground mb-1">Layout</span>
+          <select
+            value={layout}
+            onChange={(event) => onLayoutChange(event.target.value as LayoutId)}
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+          >
+            {layouts.map((preset) => (
+              <option key={preset.id} value={preset.id}>{preset.name}</option>
+            ))}
+          </select>
+        </label>
+
+        <div>
+          <div className="text-xs font-medium text-foreground mb-1">Simulation Speed</div>
+          <div className="grid grid-cols-3 gap-1" role="group" aria-label="Simulation speed">
+            {speeds.map((option) => (
+              <Button
+                key={option}
+                size="xs"
+                variant={speed === option ? 'default' : 'outline'}
+                onClick={() => onSpeedChange(option)}
+                aria-pressed={speed === option}
+              >
+                {option}x
+              </Button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -203,13 +341,16 @@ function ControlButtons({
     <section className="pt-4 border-t border-border">
       <div className="grid grid-cols-2 gap-3">
         <Button variant="outline" onClick={onPause} className="w-full">
+          {paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
           {paused ? 'Resume' : 'Pause'}
         </Button>
         <Button variant="secondary" onClick={onReset} className="w-full">
+          <RotateCcw data-icon="inline-start" />
           Reset
         </Button>
       </div>
       <Button variant="default" onClick={onGenerateReport} className="w-full mt-3">
+        <Download data-icon="inline-start" />
         Generate Report
       </Button>
     </section>

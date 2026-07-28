@@ -20,7 +20,21 @@
 
 # misc
 .DS_Store
+Thumbs.db
+Desktop.ini
 *.pem
+
+# editor
+/.idea/
+/.vscode/*
+!/.vscode/extensions.json
+!/.vscode/settings.json
+*.swp
+*.swo
+
+# tool caches
+/.cache/
+/.turbo/
 
 # debug
 npm-debug.log*
@@ -29,6 +43,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 .env*
+!.env.example
 
 # vercel
 .vercel
