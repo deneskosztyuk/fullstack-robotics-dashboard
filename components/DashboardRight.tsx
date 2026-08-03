@@ -1,14 +1,30 @@
 'use client'
 
+import { useState } from 'react'
 import { useWarehouse, WarehouseEvent } from '@/lib/WarehouseContext'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Download, Minus, Pause, Play, Plus, RotateCcw } from 'lucide-react'
+import {
+  createSimulationSnapshot,
+  serializeFleetCsv,
+  serializeSnapshotJson,
+  snapshotFileName,
+  type SimulationSnapshotExport,
+  type SnapshotExportFormat,
+} from '@/lib/export/snapshot'
 import type { LayoutId, RobotSnapshot, SimulationSpeed } from '@/lib/nav'
 
 const BATTERY_HIGH_THRESHOLD = 70
 const BATTERY_MEDIUM_THRESHOLD = 40
 const MAX_DISPLAYED_EVENTS = 8
+const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+const EXPORT_FORMATS: readonly { value: SnapshotExportFormat; label: string }[] = [
+  { value: 'json', label: 'JSON (full)' },
+  { value: 'csv', label: 'CSV (fleet)' },
+  { value: 'xlsx', label: 'Excel (.xlsx)' },
+]
 
 interface EventItemProps {
   event: WarehouseEvent
@@ -71,13 +87,14 @@ export function DashboardRight() {
     selectedRobotId,
     selectRobot,
   } = useWarehouse()
+  const [exportFormat, setExportFormat] = useState<SnapshotExportFormat>('json')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
   const selectedRobotStatus = robots.find((robot) => robot.id === selectedRobotId)?.status ?? 'waiting'
   const recentEvents = events.slice(-MAX_DISPLAYED_EVENTS).reverse()
 
-  const handleExportSnapshot = () => {
-    const report = {
-      generatedAt: new Date().toISOString(),
-      syntheticData: true,
+  const handleExportSnapshot = async () => {
+    const snapshot = createSimulationSnapshot({
       stats,
       robots,
       metrics: {
@@ -86,18 +103,35 @@ export function DashboardRight() {
         cycleSampleCount: navigationSnapshot.cycleSampleCount,
       },
       simulation: {
+        tick: navigationSnapshot.tick,
+        paused: navigationSnapshot.paused,
         layout,
+        layoutName: config.layoutName,
         speed,
         desiredRobotCount: robotCount,
         actualRobotCount,
       },
       recentEvents: events.slice(-10),
+    })
+
+    setExporting(true)
+    setExportError(null)
+
+    try {
+      const blob = await createExportBlob(snapshot, exportFormat)
+      downloadBlob(blob, snapshotFileName(snapshot, exportFormat))
+    } catch {
+      setExportError('Snapshot export failed. Try another format.')
+    } finally {
+      setExporting(false)
     }
-    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
+  }
+
+  const downloadBlob = (blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `amr-simulation-snapshot-${Date.now()}.json`
+    a.download = fileName
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -133,6 +167,10 @@ export function DashboardRight() {
         onPause={togglePause}
         onReset={reset}
         onExportSnapshot={handleExportSnapshot}
+        exportFormat={exportFormat}
+        onExportFormatChange={setExportFormat}
+        exporting={exporting}
+        exportError={exportError}
         paused={paused}
       />
 
@@ -170,6 +208,23 @@ export function DashboardRight() {
 
     </div>
   )
+}
+
+async function createExportBlob(
+  snapshot: SimulationSnapshotExport,
+  format: SnapshotExportFormat
+): Promise<Blob> {
+  if (format === 'json') {
+    return new Blob([serializeSnapshotJson(snapshot)], { type: 'application/json' })
+  }
+
+  if (format === 'csv') {
+    return new Blob([serializeFleetCsv(snapshot)], { type: 'text/csv;charset=utf-8' })
+  }
+
+  const { createSnapshotWorkbook } = await import('@/lib/export/excel')
+  const workbook = await createSnapshotWorkbook(snapshot)
+  return new Blob([workbook], { type: XLSX_MIME_TYPE })
 }
 
 function RobotInspector({
@@ -395,11 +450,19 @@ function ControlButtons({
   onPause,
   onReset,
   onExportSnapshot,
+  exportFormat,
+  onExportFormatChange,
+  exporting,
+  exportError,
   paused
 }: {
   onPause: () => void
   onReset: () => void
-  onExportSnapshot: () => void
+  onExportSnapshot: () => Promise<void>
+  exportFormat: SnapshotExportFormat
+  onExportFormatChange: (format: SnapshotExportFormat) => void
+  exporting: boolean
+  exportError: string | null
   paused: boolean
 }) {
   return (
@@ -414,10 +477,26 @@ function ControlButtons({
           Reset
         </Button>
       </div>
-      <Button variant="default" onClick={onExportSnapshot} className="w-full mt-3">
-        <Download data-icon="inline-start" />
-        Export snapshot
-      </Button>
+      <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <select
+          aria-label="Snapshot export format"
+          value={exportFormat}
+          onChange={(event) => onExportFormatChange(event.target.value as SnapshotExportFormat)}
+          disabled={exporting}
+          className="h-8 min-w-0 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:opacity-50"
+        >
+          {EXPORT_FORMATS.map((format) => (
+            <option key={format.value} value={format.value}>{format.label}</option>
+          ))}
+        </select>
+        <Button variant="default" onClick={onExportSnapshot} disabled={exporting}>
+          <Download data-icon="inline-start" />
+          {exporting ? 'Preparing' : 'Export'}
+        </Button>
+      </div>
+      {exportError && (
+        <p role="alert" className="mt-2 text-xs text-destructive">{exportError}</p>
+      )}
     </section>
   )
 }

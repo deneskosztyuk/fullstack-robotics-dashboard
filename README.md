@@ -8,6 +8,7 @@ A deterministic, synthetic warehouse traffic simulation built with Next.js, Reac
 - **Synchronized Robot Selection** - Select a robot in the scene or fleet rail to inspect its current task and state
 - **Defensible Simulation Metrics** - Review current fleet states, completed deliveries, trailing throughput, cycle samples, and battery levels
 - **Responsive Work Surface** - Scene-first layout with a compact metric strip and operator-style inspector
+- **Snapshot Exports** - Download the full snapshot as JSON, a fleet table as CSV, or a multi-sheet Excel workbook
 - **Collision-safe Navigation** - Space-time A* plans wait-capable paths against vertex and edge reservations
 - **Deterministic Simulation** - Robot tasks, battery, metrics, and movement advance in fixed 340 ms ticks
 - **Runtime Fleet Controls** - Run 1-12 robots, switch layouts, and select 0.5x, 1x, or 2x speed
