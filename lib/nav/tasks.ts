@@ -6,7 +6,8 @@ import type {
   WarehouseConfig,
 } from './types'
 
-export type PlanIntent = 'shelf' | 'dock_delivery' | 'dock_charge'
+export type PlanIntent = 'shelf_pickup' | 'shelf_drop' | 'dock_delivery' | 'dock_charge'
+export type JobDestination = 'dock' | 'shelf'
 export type RobotStatus = 'executing' | 'waiting' | 'charging'
 
 export interface RobotRuntimeState {
@@ -20,7 +21,9 @@ export interface RobotRuntimeState {
   needsCharge: boolean
   retireWhenParked: boolean
   shelfId?: string
+  destinationShelfId?: string
   dockId?: number
+  jobDestination: JobDestination
   route: TimedPath
   arrivalTick?: number
   remainingTaskTicks: number
@@ -49,6 +52,7 @@ export function createRobotRuntimeState(
     hasCargo: false,
     needsCharge: false,
     retireWhenParked: false,
+    jobDestination: 'dock',
     route: [],
     remainingTaskTicks: 0,
     waitingSinceTick: tick,
@@ -60,7 +64,7 @@ export function createRobotRuntimeState(
 }
 
 export function isMovingTask(kind: RobotTaskKind): boolean {
-  return kind === 'to_shelf' || kind === 'to_dock' || kind === 'to_charge'
+  return kind === 'to_shelf' || kind === 'to_shelf_drop' || kind === 'to_dock' || kind === 'to_charge'
 }
 
 export function taskLabel(kind: RobotTaskKind): string {
@@ -68,6 +72,8 @@ export function taskLabel(kind: RobotTaskKind): string {
     idle: 'Awaiting assignment',
     to_shelf: 'En route to shelf',
     picking: 'Picking',
+    to_shelf_drop: 'En route to destination shelf',
+    dropping_off: 'Dropping off at shelf',
     to_dock: 'En route to dock',
     delivering: 'Unloading at dock',
     wait_dock: 'Waiting for dock',

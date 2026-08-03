@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_CONFIG,
   LAYOUT_PRESETS,
+  MAX_ROBOT_COUNT,
   assertConfig,
   createWarehouseConfig,
   validateConfig,
@@ -29,10 +30,41 @@ describe('warehouse layout presets', () => {
     }
   })
 
+  it.each([1, 12, 24, 36, 48])('generates a valid scaled environment for %i robots', (robotCount) => {
+    for (const preset of LAYOUT_PRESETS) {
+      const config = createWarehouseConfig(preset.id, robotCount)
+      expect(config.robotCount).toBe(robotCount)
+      expect(config.spawnCells).toHaveLength(robotCount)
+      expect(validateConfig(config).errors).toEqual([])
+    }
+  })
+
+  it('grows bounds and resources monotonically with fleet size', () => {
+    const configs = [1, 12, 24, 36, 48]
+      .map((robotCount) => createWarehouseConfig('dense', robotCount))
+
+    for (let index = 1; index < configs.length; index++) {
+      const previous = configs[index - 1]
+      const current = configs[index]
+      expect(current.grid.maxX).toBeGreaterThanOrEqual(previous.grid.maxX)
+      expect(current.shelves.length).toBeGreaterThanOrEqual(previous.shelves.length)
+      expect(current.docks.length).toBeGreaterThanOrEqual(previous.docks.length)
+      expect(current.maxPlansPerTick).toBeGreaterThanOrEqual(previous.maxPlansPerTick)
+    }
+  })
+
+  it('caps generated environments at forty-eight robots', () => {
+    expect(MAX_ROBOT_COUNT).toBe(48)
+    expect(() => createWarehouseConfig('dense', 0)).toThrow(RangeError)
+    expect(() => createWarehouseConfig('dense', MAX_ROBOT_COUNT + 1)).toThrow(RangeError)
+    expect(() => createWarehouseConfig('dense', 1.5)).toThrow(RangeError)
+  })
+
   it('uses the locked 340 ms tick and dense twelve-robot default', () => {
     expect(DEFAULT_CONFIG.tickMs).toBe(340)
     expect(DEFAULT_CONFIG.layoutId).toBe('dense')
     expect(DEFAULT_CONFIG.robotCount).toBe(12)
+    expect(DEFAULT_CONFIG.transferProbability).toBe(0.4)
   })
 
   it('returns fresh preset copies', () => {
@@ -101,12 +133,14 @@ describe('validateConfig', () => {
       value.replanWindow = value.horizon + 1
       value.maxPlansPerTick = 0
       value.maxCycleSamples = 0
+      value.transferProbability = 2
     })
     const { errors } = validateConfig(config)
     expect(errors.some((error) => error.includes('tickMs'))).toBe(true)
     expect(errors.some((error) => error.includes('replanWindow'))).toBe(true)
     expect(errors.some((error) => error.includes('maxPlansPerTick'))).toBe(true)
     expect(errors.some((error) => error.includes('maxCycleSamples'))).toBe(true)
+    expect(errors.some((error) => error.includes('transferProbability'))).toBe(true)
   })
 
   it('rejects robot counts outside spawn capacity', () => {
@@ -118,6 +152,17 @@ describe('validateConfig', () => {
     })
     expect(validateConfig(noRobots).errors.some((error) => error.includes('greater than zero'))).toBe(true)
     expect(validateConfig(tooMany).errors.some((error) => error.includes('exceeds spawn capacity'))).toBe(true)
+  })
+
+  it('rejects robot counts above the global maximum', () => {
+    const config = withOverrides((value) => {
+      value.robotCount = MAX_ROBOT_COUNT + 1
+      value.spawnCells = Array.from({ length: value.robotCount }, (_, index) => ({
+        x: index,
+        z: value.grid.minZ,
+      }))
+    })
+    expect(validateConfig(config).errors.some((error) => error.includes('must not exceed'))).toBe(true)
   })
 
   it('rejects statically disconnected operational cells', () => {

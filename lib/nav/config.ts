@@ -21,6 +21,16 @@ export interface ValidationResult {
   warnings: string[]
 }
 
+export interface EnvironmentScale {
+  robotCount: number
+  gridSize: number
+  halfExtent: number
+  shelfCount: number
+  dockCount: number
+  spawnCount: number
+  maxPlansPerTick: number
+}
+
 export const LAYOUT_PRESETS: readonly LayoutPreset[] = [
   { id: 'open', name: 'Open floor' },
   { id: 'aisles', name: 'Parallel aisles' },
@@ -28,15 +38,19 @@ export const LAYOUT_PRESETS: readonly LayoutPreset[] = [
 ]
 
 export const DEFAULT_LAYOUT_ID: LayoutId = 'dense'
+export const MIN_ROBOT_COUNT = 1
+export const MAX_ROBOT_COUNT = 48
 
-const GRID = { minX: -10, maxX: 10, minZ: -10, maxZ: 10 }
-const DOCKS: readonly DockConfig[] = [
+const BASE_HALF_EXTENT = 10
+const BASE_ROBOT_COUNT = 12
+const ROBOTS_PER_EXPANSION = 4
+const LEGACY_DOCKS: readonly DockConfig[] = [
   { id: 1, cell: { x: 0, z: 0 } },
   { id: 2, cell: { x: 1, z: 0 } },
   { id: 3, cell: { x: 0, z: 1 } },
   { id: 4, cell: { x: -1, z: 0 } },
 ]
-const SPAWN_CELLS: readonly Cell[] = [
+const LEGACY_SPAWN_CELLS: readonly Cell[] = [
   { x: 2, z: 2 },
   { x: -2, z: 2 },
   { x: 2, z: -2 },
@@ -50,10 +64,20 @@ const SPAWN_CELLS: readonly Cell[] = [
   { x: 2, z: -3 },
   { x: -2, z: -3 },
 ]
-const SHELF_IDS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 function copyCell(cell: Cell): Cell {
   return { x: cell.x, z: cell.z }
+}
+
+function shelfId(index: number): string {
+  let value = index + 1
+  let id = ''
+  while (value > 0) {
+    value--
+    id = String.fromCharCode(65 + value % 26) + id
+    value = Math.floor(value / 26)
+  }
+  return id
 }
 
 function buildShelves(columns: readonly number[], zValues: readonly number[]): ShelfConfig[] {
@@ -62,7 +86,7 @@ function buildShelves(columns: readonly number[], zValues: readonly number[]): S
     for (const z of zValues) {
       const index = shelves.length
       shelves.push({
-        id: SHELF_IDS[index],
+        id: shelfId(index),
         cell: { x, z },
         pickCell: { x: x - Math.sign(x) * 2, z },
       })
@@ -71,14 +95,150 @@ function buildShelves(columns: readonly number[], zValues: readonly number[]): S
   return shelves
 }
 
-function layoutDefinition(layoutId: LayoutId): { name: string; shelves: ShelfConfig[] } {
+function halfExtentFor(robotCount: number): number {
+  return BASE_HALF_EXTENT + Math.ceil(Math.max(0, robotCount - BASE_ROBOT_COUNT) / ROBOTS_PER_EXPANSION)
+}
+
+function symmetricRows(halfExtent: number): number[] {
+  const rowExtent = Math.floor((halfExtent - 4) / 3) * 3
+  const rows: number[] = []
+  for (let z = -rowExtent; z <= rowExtent; z += 3) rows.push(z)
+  return rows
+}
+
+function centeredRows(rows: readonly number[], count: number): number[] {
+  return [...rows]
+    .sort((first, second) => Math.abs(first) - Math.abs(second) || second - first)
+    .slice(0, count)
+}
+
+function shelfColumns(halfExtent: number, pairCount: number): number[] {
+  const positive: number[] = []
+  for (let x = halfExtent - 2; x >= 5; x -= 3) positive.push(x)
+  const selected = pairCount === 1
+    ? [positive[0]]
+    : Array.from({ length: pairCount }, (_, index) => {
+        const candidateIndex = Math.round(index * (positive.length - 1) / (pairCount - 1))
+        return positive[candidateIndex]
+      })
+  return [...selected, ...[...selected].reverse().map((x) => -x)]
+}
+
+function layoutDefinition(
+  layoutId: LayoutId,
+  halfExtent: number
+): { name: string; shelves: ShelfConfig[] } {
+  const rows = symmetricRows(halfExtent)
+  const expanded = halfExtent >= 16
+
   switch (layoutId) {
     case 'open':
-      return { name: 'Open floor', shelves: buildShelves([8, -8], [0, 3, -3]) }
+      return {
+        name: 'Open floor',
+        shelves: buildShelves(
+          shelfColumns(halfExtent, 1),
+          centeredRows(rows, Math.min(rows.length, 3 + 2 * Math.floor((halfExtent - 10) / 3)))
+        ),
+      }
     case 'aisles':
-      return { name: 'Parallel aisles', shelves: buildShelves([8, -8], [-6, -3, 0, 3, 6]) }
+      return {
+        name: 'Parallel aisles',
+        shelves: buildShelves(shelfColumns(halfExtent, expanded ? 2 : 1), rows),
+      }
     case 'dense':
-      return { name: 'High density', shelves: buildShelves([8, 5, -5, -8], [-6, -3, 0, 3, 6]) }
+      return {
+        name: 'High density',
+        shelves: buildShelves(shelfColumns(halfExtent, expanded ? 3 : 2), rows),
+      }
+  }
+}
+
+function resourceKeys(shelves: readonly ShelfConfig[]): Set<string> {
+  return new Set(shelves.flatMap((shelf) => [cellKey(shelf.cell), cellKey(shelf.pickCell)]))
+}
+
+function centerOutCells(halfExtent: number, minimumRadius = 0): Cell[] {
+  const cells: Cell[] = []
+  for (let x = -halfExtent + 1; x < halfExtent; x++) {
+    for (let z = -halfExtent + 1; z < halfExtent; z++) {
+      if (Math.max(Math.abs(x), Math.abs(z)) < minimumRadius) continue
+      cells.push({ x, z })
+    }
+  }
+  return cells.sort((first, second) =>
+    Math.max(Math.abs(first.x), Math.abs(first.z)) - Math.max(Math.abs(second.x), Math.abs(second.z)) ||
+    Math.abs(first.x) + Math.abs(first.z) - Math.abs(second.x) - Math.abs(second.z) ||
+    second.z - first.z ||
+    second.x - first.x
+  )
+}
+
+function generateDocks(count: number, halfExtent: number, blocked: Set<string>): DockConfig[] {
+  const candidates = [
+    ...LEGACY_DOCKS.map((dock) => dock.cell),
+    ...centerOutCells(halfExtent),
+  ]
+  const docks: DockConfig[] = []
+  const used = new Set<string>()
+  for (const cell of candidates) {
+    const key = cellKey(cell)
+    if (blocked.has(key) || used.has(key)) continue
+    used.add(key)
+    docks.push({ id: docks.length + 1, cell: copyCell(cell) })
+    if (docks.length === count) return docks
+  }
+  throw new RangeError(`Unable to generate ${count} docks`)
+}
+
+function generateSpawnCells(
+  count: number,
+  halfExtent: number,
+  blocked: Set<string>
+): Cell[] {
+  const candidates = [
+    ...LEGACY_SPAWN_CELLS,
+    ...centerOutCells(halfExtent, 2),
+  ]
+  const spawns: Cell[] = []
+  const used = new Set<string>()
+  for (const cell of candidates) {
+    const key = cellKey(cell)
+    if (blocked.has(key) || used.has(key)) continue
+    used.add(key)
+    spawns.push(copyCell(cell))
+    if (spawns.length === count) return spawns
+  }
+  throw new RangeError(`Unable to generate ${count} spawn cells`)
+}
+
+function assertRobotCount(robotCount: number): void {
+  if (!Number.isInteger(robotCount) || robotCount < MIN_ROBOT_COUNT || robotCount > MAX_ROBOT_COUNT) {
+    throw new RangeError(`robot count must be between ${MIN_ROBOT_COUNT} and ${MAX_ROBOT_COUNT}`)
+  }
+}
+
+function createEnvironment(layoutId: LayoutId, robotCount: number) {
+  assertRobotCount(robotCount)
+  const halfExtent = halfExtentFor(robotCount)
+  const layout = layoutDefinition(layoutId, halfExtent)
+  const blocked = resourceKeys(layout.shelves)
+  const dockCount = Math.max(4, Math.ceil(robotCount / 4))
+  const docks = generateDocks(dockCount, halfExtent, blocked)
+  const spawnBlocked = new Set([...blocked, ...docks.map((dock) => cellKey(dock.cell))])
+  const spawnCells = generateSpawnCells(robotCount, halfExtent, spawnBlocked)
+  return { halfExtent, layout, docks, spawnCells }
+}
+
+export function getEnvironmentScale(layoutId: LayoutId, robotCount: number): EnvironmentScale {
+  const environment = createEnvironment(layoutId, robotCount)
+  return {
+    robotCount,
+    gridSize: environment.halfExtent * 2 + 1,
+    halfExtent: environment.halfExtent,
+    shelfCount: environment.layout.shelves.length,
+    dockCount: environment.docks.length,
+    spawnCount: environment.spawnCells.length,
+    maxPlansPerTick: Math.max(4, Math.ceil(robotCount / 6)),
   }
 }
 
@@ -86,20 +246,25 @@ export function createWarehouseConfig(
   layoutId: LayoutId = DEFAULT_LAYOUT_ID,
   robotCount = 12
 ): WarehouseConfig {
-  const layout = layoutDefinition(layoutId)
+  const environment = createEnvironment(layoutId, robotCount)
   const tickMs = 340
 
   return {
     layoutId,
-    layoutName: layout.name,
-    grid: { ...GRID },
-    shelves: layout.shelves,
-    docks: DOCKS.map((dock) => ({ id: dock.id, cell: copyCell(dock.cell) })),
-    spawnCells: SPAWN_CELLS.map(copyCell),
+    layoutName: environment.layout.name,
+    grid: {
+      minX: -environment.halfExtent,
+      maxX: environment.halfExtent,
+      minZ: -environment.halfExtent,
+      maxZ: environment.halfExtent,
+    },
+    shelves: environment.layout.shelves,
+    docks: environment.docks,
+    spawnCells: environment.spawnCells,
     tickMs,
-    horizon: 80,
+    horizon: 80 + (environment.halfExtent - BASE_HALF_EXTENT) * 4,
     replanWindow: 16,
-    maxPlansPerTick: 4,
+    maxPlansPerTick: Math.max(4, Math.ceil(robotCount / 6)),
     maxCatchUpSteps: 5,
     retryBackoff: { initialTicks: 2, maxTicks: 32 },
     battery: {
@@ -112,6 +277,8 @@ export function createWarehouseConfig(
     },
     pickDurationTicks: 6,
     deliverDurationTicks: 6,
+    shelfDropDurationTicks: 6,
+    transferProbability: 0.4,
     throughputWindowTicks: Math.ceil(60_000 / tickMs),
     maxCompletedOrdersHistory: 60,
     maxCycleSamples: 20,
@@ -237,6 +404,16 @@ export function validateConfig(config: WarehouseConfig): ValidationResult {
   }
   if (!isPositiveInteger(config.pickDurationTicks)) errors.push('pickDurationTicks must be a positive integer')
   if (!isPositiveInteger(config.deliverDurationTicks)) errors.push('deliverDurationTicks must be a positive integer')
+  if (!isPositiveInteger(config.shelfDropDurationTicks)) {
+    errors.push('shelfDropDurationTicks must be a positive integer')
+  }
+  if (
+    !Number.isFinite(config.transferProbability) ||
+    config.transferProbability < 0 ||
+    config.transferProbability > 1
+  ) {
+    errors.push('transferProbability must be between 0 and 1')
+  }
   if (!isPositiveInteger(config.throughputWindowTicks)) {
     errors.push('throughputWindowTicks must be a positive integer')
   }
@@ -271,6 +448,9 @@ export function validateConfig(config: WarehouseConfig): ValidationResult {
 
   if (!Number.isInteger(config.robotCount) || config.robotCount < 1) {
     errors.push('robotCount must be an integer greater than zero')
+  }
+  if (config.robotCount > MAX_ROBOT_COUNT) {
+    errors.push(`robotCount must not exceed ${MAX_ROBOT_COUNT}`)
   }
   if (config.robotCount > config.spawnCells.length) {
     errors.push(`robotCount ${config.robotCount} exceeds spawn capacity (${config.spawnCells.length})`)

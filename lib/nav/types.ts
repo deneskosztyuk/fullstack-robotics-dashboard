@@ -60,6 +60,8 @@ export interface WarehouseConfig {
   battery: BatteryConfig
   pickDurationTicks: number
   deliverDurationTicks: number
+  shelfDropDurationTicks: number
+  transferProbability: number
   throughputWindowTicks: number
   maxCompletedOrdersHistory: number
   maxCycleSamples: number
@@ -71,6 +73,8 @@ export type RobotTaskKind =
   | 'idle'
   | 'to_shelf'
   | 'picking'
+  | 'to_shelf_drop'
+  | 'dropping_off'
   | 'to_dock'
   | 'delivering'
   | 'wait_dock'
@@ -82,6 +86,7 @@ export interface RobotSnapshot {
   id: RobotId
   kind: RobotTaskKind
   shelfId?: string
+  destinationShelfId?: string
   dockId?: number
   arrivalTick?: number
   waitingSinceTick: number
@@ -100,6 +105,7 @@ export interface EngineSnapshot {
   tick: number
   robots: RobotSnapshot[]
   completedOrders: number
+  completedTransfers: number
   deliveriesLast60Seconds: number
   avgCycleSeconds: number
   cycleSampleCount: number
@@ -107,7 +113,6 @@ export interface EngineSnapshot {
   speed: SimulationSpeed
   layoutId: LayoutId
   desiredRobotCount: number
-  canAddRobot: boolean
 }
 
 export interface RenderRobotPose {

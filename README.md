@@ -11,15 +11,17 @@ A deterministic, synthetic warehouse traffic simulation built with Next.js, Reac
 - **Snapshot Exports** - Download the full snapshot as JSON, a fleet table as CSV, or a multi-sheet Excel workbook
 - **Collision-safe Navigation** - Space-time A* plans wait-capable paths against vertex and edge reservations
 - **Deterministic Simulation** - Robot tasks, battery, metrics, and movement advance in fixed 340 ms ticks
-- **Runtime Fleet Controls** - Run 1-12 robots, switch layouts, and select 0.5x, 1x, or 2x speed
+- **Mixed Material Flow** - A deterministic 60/40 workload sends most cargo to docks while incorporating shelf-to-shelf transfers
+- **Scaled Environments** - Run 1-48 robots while grid bounds, spawn capacity, shelves, docks, and planning budget grow deterministically
+- **Rate-limited Configuration** - Preview fleet and density changes, then rebuild atomically with a five-second Apply cooldown
 
 ## Navigation Architecture
 
-The framework-free engine in `lib/nav` owns the warehouse grid, resource claims, reservation table, robot task state, battery model, metrics, and event stream. Paths use absolute simulation ticks and reserve both destination cells and directed edges, preventing same-cell collisions and head-on swaps in committed movement.
+The framework-free engine in `lib/nav` owns the warehouse grid, resource claims, reservation table, robot task state, battery model, metrics, and event stream. Paths use absolute simulation ticks and reserve both destination cells and directed edges, preventing same-cell collisions and head-on swaps in committed movement. Each job begins at an origin shelf; 60% continue to a dock and 40% transfer cargo to a separately claimed destination shelf.
 
 `lib/WarehouseContext.tsx` owns one engine instance and advances it from `requestAnimationFrame`. React receives logical snapshots at tick boundaries. `components/WarehouseScene.tsx` does not plan or mutate tasks; it only interpolates each robot from its previous cell to its current cell for smooth rendering.
 
-The Open floor, Parallel aisles, and High density presets each provide four shared docks and twelve valid spawn cells. Changing layouts performs an atomic simulation reset while preserving the selected speed and fleet size.
+The Open floor, Parallel aisles, and High density presets control shelf and aisle congestion. Fleet size controls environment scale: the simulator generates matching bounds, spawn cells, docks, shelves, and planning capacity before validating reachability and rebuilding atomically. Applied changes reset simulation time and metrics, preserve speed, and enter a five-second cooldown.
 
 ## Tech Stack
 
@@ -46,5 +48,5 @@ Open [http://localhost:3000](http://localhost:3000).
 - `npm run start` - Start production server
 - `npm run lint` - Run ESLint
 - `npm run typecheck` - Run TypeScript type check
-- `npm test` - Run navigation unit, scenario, and 12-robot stress tests
+- `npm test` - Run navigation unit, scenario, export, cooldown, and 48-robot stress tests
 - `npm run test:watch` - Run Vitest in watch mode

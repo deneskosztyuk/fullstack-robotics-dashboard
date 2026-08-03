@@ -72,7 +72,7 @@ describe('spaceTimeAStar', () => {
       horizon: 6,
     })
     expect(plan?.arrivalTick).toBe(4)
-    expect(plan?.path.at(-1)).toEqual({ x: 2, z: 0, tick: 6 })
+    expect(plan?.path.at(-1)).toEqual({ x: 2, z: 0, tick: 4 })
   })
 
   it('returns null for a parked goal', () => {
@@ -89,7 +89,7 @@ describe('spaceTimeAStar', () => {
     })).toBeNull()
   })
 
-  it('returns a held path and distinct arrival tick when already at the goal', () => {
+  it('returns an immediate path when already at the goal', () => {
     const plan = spaceTimeAStar({
       grid,
       reservations: new ReservationTable(),
@@ -100,12 +100,7 @@ describe('spaceTimeAStar', () => {
       horizon: 3,
     })
     expect(plan?.arrivalTick).toBe(5)
-    expect(plan?.path).toEqual([
-      { x: 0, z: 0, tick: 5 },
-      { x: 0, z: 0, tick: 6 },
-      { x: 0, z: 0, tick: 7 },
-      { x: 0, z: 0, tick: 8 },
-    ])
+    expect(plan?.path).toEqual([{ x: 0, z: 0, tick: 5 }])
   })
 
   it('returns null when the goal exceeds the horizon or is blocked', () => {

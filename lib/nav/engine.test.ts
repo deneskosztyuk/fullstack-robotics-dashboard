@@ -34,7 +34,10 @@ function assertConflictFree(previous: EngineSnapshot, current: EngineSnapshot): 
 }
 
 function assertUniqueClaims(snapshot: EngineSnapshot): void {
-  const shelfClaims = snapshot.robots.flatMap((robot) => robot.shelfId === undefined ? [] : [robot.shelfId])
+  const shelfClaims = snapshot.robots.flatMap((robot) => [
+    ...(robot.shelfId === undefined ? [] : [robot.shelfId]),
+    ...(robot.destinationShelfId === undefined ? [] : [robot.destinationShelfId]),
+  ])
   const dockClaims = snapshot.robots.flatMap((robot) => robot.dockId === undefined ? [] : [robot.dockId])
   expect(new Set(shelfClaims).size).toBe(shelfClaims.length)
   expect(new Set(dockClaims).size).toBe(dockClaims.length)
@@ -95,29 +98,56 @@ describe('NavigationEngine timing and controls', () => {
     expect(snapshot.completedOrders).toBe(0)
   })
 
-  it('adds parked robots immediately and retires moving robots at their next destination', () => {
+  it('atomically rebuilds the environment for a new fleet size', () => {
     const engine = new NavigationEngine(createWarehouseConfig('open', 2))
-    engine.setRobotCount(5)
-    expect(engine.getSnapshot().robots).toHaveLength(5)
+    engine.setSpeed(2)
+    advanceTicks(engine, 20)
 
-    advanceTicks(engine, 2)
-    engine.setRobotCount(1)
-    const pending = engine.getSnapshot()
-    expect(pending.desiredRobotCount).toBe(1)
-    expect(pending.robots.some((robot) => robot.retireWhenParked)).toBe(true)
+    const previousGeneration = engine.getSnapshot().generation
+    engine.configureEnvironment('dense', 24)
+    const snapshot = engine.getSnapshot()
+    const config = engine.getConfig()
 
-    advanceTicks(engine, 100)
-    expect(engine.getSnapshot().robots).toHaveLength(1)
+    expect(snapshot.generation).toBe(previousGeneration + 1)
+    expect(snapshot.tick).toBe(0)
+    expect(snapshot.speed).toBe(2)
+    expect(snapshot.layoutId).toBe('dense')
+    expect(snapshot.robots).toHaveLength(24)
+    expect(snapshot.completedOrders).toBe(0)
+    expect(config.grid.maxX).toBeGreaterThan(10)
+    expect(config.spawnCells).toHaveLength(24)
   })
 
-  it('rejects robot counts outside configured capacity', () => {
+  it('rejects robot counts outside the global limit', () => {
     const engine = new NavigationEngine()
     expect(() => engine.setRobotCount(0)).toThrow(RangeError)
-    expect(() => engine.setRobotCount(13)).toThrow(RangeError)
+    expect(() => engine.setRobotCount(49)).toThrow(RangeError)
   })
 })
 
 describe('NavigationEngine tasks and safety', () => {
+  it('completes a shelf-to-shelf transfer without counting a dock delivery', () => {
+    const config = createWarehouseConfig('open', 1)
+    config.transferProbability = 1
+    const engine = new NavigationEngine(config)
+    let observedTransferAssignment = false
+
+    for (let tick = 0; tick < 300 && engine.getSnapshot().completedTransfers === 0; tick++) {
+      advanceTicks(engine, 1)
+      const robot = engine.getSnapshot().robots[0]
+      if (robot.destinationShelfId !== undefined) {
+        observedTransferAssignment = true
+        expect(robot.destinationShelfId).not.toBe(robot.shelfId)
+      }
+    }
+
+    const snapshot = engine.getSnapshot()
+    expect(observedTransferAssignment).toBe(true)
+    expect(snapshot.completedTransfers).toBeGreaterThan(0)
+    expect(snapshot.completedOrders).toBe(0)
+    expect(snapshot.robots[0].hasCargo).toBe(false)
+  })
+
   it('completes deterministic shelf-to-dock task cycles from zero metrics', () => {
     const engine = new NavigationEngine(createWarehouseConfig('open', 1))
     const initial = engine.getSnapshot()
@@ -227,4 +257,27 @@ describe('NavigationEngine tasks and safety', () => {
 
     expect(engine.getSnapshot().completedOrders).toBeGreaterThan(0)
   })
+
+  it('runs forty-eight robots in the dense environment without safety conflicts', () => {
+    const engine = new NavigationEngine(createWarehouseConfig('dense', 48))
+    let previous = engine.getSnapshot()
+
+    for (let tick = 0; tick < 500; tick++) {
+      advanceTicks(engine, 1)
+      const current = engine.getSnapshot()
+      assertConflictFree(previous, current)
+      assertUniqueClaims(current)
+      for (const robot of current.robots) {
+        expect(Number.isFinite(robot.battery)).toBe(true)
+        expect(robot.battery).toBeGreaterThanOrEqual(0)
+        expect(robot.battery).toBeLessThanOrEqual(100)
+      }
+      previous = current
+    }
+
+    const snapshot = engine.getSnapshot()
+    expect(snapshot.robots).toHaveLength(48)
+    expect(snapshot.completedTransfers).toBeGreaterThan(0)
+    expect(snapshot.completedOrders).toBeGreaterThan(snapshot.completedTransfers)
+  }, 15_000)
 })

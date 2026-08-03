@@ -21,6 +21,8 @@ describe('task helpers', () => {
 
   it('maps task labels and fleet statuses', () => {
     expect(taskLabel('wait_dock')).toBe('Waiting for dock')
+    expect(taskLabel('to_shelf_drop')).toBe('En route to destination shelf')
+    expect(taskLabel('dropping_off')).toBe('Dropping off at shelf')
     expect(statusForTask('to_charge')).toBe('charging')
     expect(statusForTask('wait_dock')).toBe('waiting')
     expect(statusForTask('wait_path')).toBe('waiting')

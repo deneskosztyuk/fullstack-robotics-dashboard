@@ -5,7 +5,7 @@ import { createSimulationSnapshot } from './snapshot'
 describe('Excel snapshot export', () => {
   it('creates a readable workbook with summary, fleet and event data', async () => {
     const snapshot = createSimulationSnapshot({
-      stats: { completedOrders: 7 },
+      stats: { completedOrders: 7, completedTransfers: 2 },
       robots: [{
         id: 2,
         status: 'executing',
@@ -13,6 +13,8 @@ describe('Excel snapshot export', () => {
         battery: 82,
         location: 'Shelf B pick face',
         retireWhenParked: false,
+        shelfId: 'A',
+        destinationShelfId: 'B',
       }],
       metrics: {
         deliveriesLast60SimulationSeconds: 4,
@@ -24,6 +26,10 @@ describe('Excel snapshot export', () => {
         paused: false,
         layout: 'open',
         layoutName: 'Open floor',
+        gridWidth: 21,
+        gridDepth: 21,
+        shelfCount: 6,
+        dockCount: 4,
         speed: 1,
         desiredRobotCount: 4,
         actualRobotCount: 4,
@@ -49,8 +55,10 @@ describe('Excel snapshot export', () => {
     const fleetRows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets.Fleet, { header: 1 })
     const eventRows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets.Events, { header: 1 })
 
-    expect(summaryRows).toContainEqual(['Completed orders', 7])
-    expect(fleetRows[1]).toEqual([2, 'executing', 'Picking', 'Shelf B pick face', 82, false])
+    expect(summaryRows).toContainEqual(['Completed dock orders', 7])
+    expect(summaryRows).toContainEqual(['Completed shelf transfers', 2])
+    expect(summaryRows).toContainEqual(['Grid dimensions', '21 x 21 cells'])
+    expect(fleetRows[1]).toEqual([2, 'executing', 'Picking', 'A', 'B', 'Shelf B pick face', 82, false])
     expect(eventRows[1]).toEqual([3, 40, 'activity', 'info', 2, 'Robot #2 started picking'])
   })
 })

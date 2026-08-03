@@ -3,12 +3,15 @@ export {
   DEFAULT_CONFIG,
   DEFAULT_LAYOUT_ID,
   LAYOUT_PRESETS,
+  MAX_ROBOT_COUNT,
+  MIN_ROBOT_COUNT,
   assertConfig,
   createWarehouseConfig,
+  getEnvironmentScale,
   validateConfig,
 } from './config'
 export { locationForCell, statusForTask } from './tasks'
-export type { LayoutPreset } from './config'
+export type { EnvironmentScale, LayoutPreset } from './config'
 
 export type {
   BatteryConfig,

@@ -2,6 +2,8 @@ import { GridMap } from './grid'
 import { ReservationTable } from './reservations'
 import type { Cell, RobotId, TimedPath } from './types'
 
+const MAX_EXPANDED_NODES = 3_000
+
 export interface SpaceTimePlan {
   path: TimedPath
   arrivalTick: number
@@ -82,7 +84,7 @@ function nodeKey(cell: Cell, tick: number): string {
   return `${cell.x},${cell.z},${tick}`
 }
 
-function reconstruct(node: SearchNode, endTick: number): TimedPath {
+function reconstruct(node: SearchNode): TimedPath {
   const path: TimedPath = []
   let current: SearchNode | undefined = node
   while (current) {
@@ -90,9 +92,6 @@ function reconstruct(node: SearchNode, endTick: number): TimedPath {
     current = current.parent
   }
   path.reverse()
-  for (let tick = node.tick + 1; tick <= endTick; tick++) {
-    path.push({ x: node.x, z: node.z, tick })
-  }
   return path
 }
 
@@ -123,6 +122,7 @@ export function spaceTimeAStar(options: SpaceTimeAStarOptions): SpaceTimePlan | 
   const open = new MinHeap<SearchNode>(compare)
   const closed = new Set<string>()
   let order = 0
+  let expandedNodes = 0
 
   open.push({
     ...start,
@@ -137,12 +137,14 @@ export function spaceTimeAStar(options: SpaceTimeAStarOptions): SpaceTimePlan | 
     const currentKey = nodeKey(current, current.tick)
     if (closed.has(currentKey)) continue
     closed.add(currentKey)
+    expandedNodes++
+    if (expandedNodes > MAX_EXPANDED_NODES) return null
 
     if (
       sameCell(current, goal) &&
       canHoldGoal(goal, current.tick, endTick, reservations, robot)
     ) {
-      return { path: reconstruct(current, endTick), arrivalTick: current.tick }
+      return { path: reconstruct(current), arrivalTick: current.tick }
     }
     if (current.tick >= endTick) continue
 

@@ -5,11 +5,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
 import {
   LAYOUT_PRESETS,
+  MAX_ROBOT_COUNT,
   NavigationEngine,
   createWarehouseConfig,
   locationForCell,
@@ -23,6 +25,10 @@ import {
   type SimulationSpeed,
   type WarehouseConfig,
 } from '@/lib/nav'
+import {
+  ENVIRONMENT_COOLDOWN_MS,
+  cooldownSecondsRemaining,
+} from '@/lib/environment-cooldown'
 
 const MAX_EVENTS = 50
 
@@ -35,10 +41,13 @@ export interface RobotData {
   battery: number
   location: string
   retireWhenParked: boolean
+  shelfId?: string
+  destinationShelfId?: string
 }
 
 interface Stats {
   completedOrders: number
+  completedTransfers: number
 }
 
 interface WarehouseContextType {
@@ -51,11 +60,10 @@ interface WarehouseContextType {
   robotCount: number
   actualRobotCount: number
   maxRobotCount: number
-  canAddRobot: boolean
-  setRobotCount: (count: number) => void
   layout: LayoutId
   layouts: readonly LayoutPreset[]
-  setLayout: (layout: LayoutId) => void
+  applyEnvironment: (layout: LayoutId, robotCount: number) => boolean
+  environmentCooldownSeconds: number
   speed: SimulationSpeed
   setSpeed: (speed: SimulationSpeed) => void
   selectedRobotId: number | null
@@ -78,6 +86,8 @@ export function WarehouseProvider({ children }: WarehouseProviderProps) {
   const [navigationSnapshot, setNavigationSnapshot] = useState(() => engine.getSnapshot())
   const [config, setConfig] = useState(() => engine.getConfig())
   const [events, setEvents] = useState<WarehouseEvent[]>([])
+  const [environmentCooldownSeconds, setEnvironmentCooldownSeconds] = useState(0)
+  const cooldownUntilRef = useRef(0)
   const [preferredRobotId, setPreferredRobotId] = useState<number | null>(
     () => engine.getSnapshot().robots[0]?.id ?? null
   )
@@ -113,16 +123,27 @@ export function WarehouseProvider({ children }: WarehouseProviderProps) {
     setConfig(engine.getConfig())
   }, [engine])
 
-  const setRobotCount = useCallback((count: number) => {
-    engine.setRobotCount(count)
+  const applyEnvironment = useCallback((layout: LayoutId, robotCount: number): boolean => {
+    const now = performance.now()
+    if (cooldownUntilRef.current > now) return false
+
+    setEvents([])
+    engine.configureEnvironment(layout, robotCount)
     setConfig(engine.getConfig())
+    cooldownUntilRef.current = now + ENVIRONMENT_COOLDOWN_MS
+    setEnvironmentCooldownSeconds(ENVIRONMENT_COOLDOWN_MS / 1_000)
+    return true
   }, [engine])
 
-  const setLayout = useCallback((layout: LayoutId) => {
-    setEvents([])
-    engine.setLayout(layout)
-    setConfig(engine.getConfig())
-  }, [engine])
+  useEffect(() => {
+    if (environmentCooldownSeconds === 0) return
+    const timer = window.setInterval(() => {
+      const remaining = cooldownSecondsRemaining(cooldownUntilRef.current, performance.now())
+      setEnvironmentCooldownSeconds(remaining)
+      if (remaining === 0) window.clearInterval(timer)
+    }, 200)
+    return () => window.clearInterval(timer)
+  }, [environmentCooldownSeconds])
 
   const setSpeed = useCallback((speed: SimulationSpeed) => {
     engine.setSpeed(speed)
@@ -147,23 +168,27 @@ export function WarehouseProvider({ children }: WarehouseProviderProps) {
     battery: Math.round(robot.battery),
     location: locationForCell(config, robot.cell),
     retireWhenParked: robot.retireWhenParked,
+    shelfId: robot.shelfId,
+    destinationShelfId: robot.destinationShelfId,
   }))
 
   const contextValue: WarehouseContextType = {
     robots,
-    stats: { completedOrders: navigationSnapshot.completedOrders },
+    stats: {
+      completedOrders: navigationSnapshot.completedOrders,
+      completedTransfers: navigationSnapshot.completedTransfers,
+    },
     events,
     paused: navigationSnapshot.paused,
     togglePause,
     reset,
     robotCount: navigationSnapshot.desiredRobotCount,
     actualRobotCount: navigationSnapshot.robots.length,
-    maxRobotCount: config.spawnCells.length,
-    canAddRobot: navigationSnapshot.canAddRobot,
-    setRobotCount,
+    maxRobotCount: MAX_ROBOT_COUNT,
     layout: navigationSnapshot.layoutId,
     layouts: LAYOUT_PRESETS,
-    setLayout,
+    applyEnvironment,
+    environmentCooldownSeconds,
     speed: navigationSnapshot.speed,
     setSpeed,
     selectedRobotId: selectedRobot?.id ?? null,

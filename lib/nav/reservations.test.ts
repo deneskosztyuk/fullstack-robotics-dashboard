@@ -98,6 +98,26 @@ describe('ReservationTable paths', () => {
     expect(table.lastReservedTick(1)).toBe(4)
   })
 
+  it('parks a committed destination from its arrival tick', () => {
+    const table = new ReservationTable()
+    expect(table.parkRobot({ x: 0, z: 0 }, 1, 0)).toBe(true)
+    expect(table.commitPath(corridorPath, 1, 2)).toBe(true)
+    expect(table.canReserveVertex({ x: 2, z: 0 }, 100, 2)).toBe(false)
+    expect(table.parkedOccupant({ x: 2, z: 0 }, 2)).toBe(1)
+  })
+
+  it('replaces future destination parking when replanning before arrival', () => {
+    const table = new ReservationTable()
+    expect(table.parkRobot({ x: 0, z: 0 }, 1, 0)).toBe(true)
+    expect(table.commitPath(corridorPath, 1, 2)).toBe(true)
+    expect(table.commitPath([
+      { x: 1, z: 0, tick: 1 },
+      { x: 1, z: 1, tick: 2 },
+    ], 1, 2)).toBe(true)
+    expect(table.isParkedAt({ x: 2, z: 0 })).toBe(false)
+    expect(table.parkedOccupant({ x: 1, z: 1 }, 2)).toBe(1)
+  })
+
   it('rejects malformed paths', () => {
     const table = new ReservationTable()
     expect(table.commitPath([], 1)).toBe(false)

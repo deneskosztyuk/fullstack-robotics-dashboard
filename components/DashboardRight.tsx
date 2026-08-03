@@ -13,7 +13,13 @@ import {
   type SimulationSnapshotExport,
   type SnapshotExportFormat,
 } from '@/lib/export/snapshot'
-import type { LayoutId, RobotSnapshot, SimulationSpeed } from '@/lib/nav'
+import {
+  MIN_ROBOT_COUNT,
+  getEnvironmentScale,
+  type LayoutId,
+  type RobotSnapshot,
+  type SimulationSpeed,
+} from '@/lib/nav'
 
 const BATTERY_HIGH_THRESHOLD = 70
 const BATTERY_MEDIUM_THRESHOLD = 40
@@ -76,11 +82,10 @@ export function DashboardRight() {
     robotCount,
     actualRobotCount,
     maxRobotCount,
-    canAddRobot,
-    setRobotCount,
     layout,
     layouts,
-    setLayout,
+    applyEnvironment,
+    environmentCooldownSeconds,
     speed,
     setSpeed,
     selectedRobot,
@@ -107,6 +112,10 @@ export function DashboardRight() {
         paused: navigationSnapshot.paused,
         layout,
         layoutName: config.layoutName,
+        gridWidth: config.grid.maxX - config.grid.minX + 1,
+        gridDepth: config.grid.maxZ - config.grid.minZ + 1,
+        shelfCount: config.shelves.length,
+        dockCount: config.docks.length,
         speed,
         desiredRobotCount: robotCount,
         actualRobotCount,
@@ -154,11 +163,10 @@ export function DashboardRight() {
         robotCount={robotCount}
         actualRobotCount={actualRobotCount}
         maxRobotCount={maxRobotCount}
-        canAddRobot={canAddRobot}
-        onRobotCountChange={setRobotCount}
         layout={layout}
         layouts={layouts}
-        onLayoutChange={setLayout}
+        onApplyEnvironment={applyEnvironment}
+        cooldownSeconds={environmentCooldownSeconds}
         speed={speed}
         onSpeedChange={setSpeed}
       />
@@ -243,8 +251,10 @@ function RobotInspector({
   const arrivalSeconds = robot.arrivalTick === undefined
     ? null
     : Math.max(0, (robot.arrivalTick - currentTick) * tickMs / 1000)
-  const assignment = robot.shelfId
-    ? `Shelf ${robot.shelfId}`
+  const assignment = robot.destinationShelfId
+    ? `Shelf ${robot.shelfId} to Shelf ${robot.destinationShelfId}`
+    : robot.shelfId
+      ? `Shelf ${robot.shelfId}`
     : robot.dockId !== undefined
       ? `Dock D${robot.dockId}`
       : 'No claimed resource'
@@ -297,26 +307,45 @@ function FleetControls({
   robotCount,
   actualRobotCount,
   maxRobotCount,
-  canAddRobot,
-  onRobotCountChange,
   layout,
   layouts,
-  onLayoutChange,
+  onApplyEnvironment,
+  cooldownSeconds,
   speed,
   onSpeedChange,
 }: {
   robotCount: number
   actualRobotCount: number
   maxRobotCount: number
-  canAddRobot: boolean
-  onRobotCountChange: (count: number) => void
   layout: LayoutId
   layouts: readonly { id: LayoutId; name: string }[]
-  onLayoutChange: (layout: LayoutId) => void
+  onApplyEnvironment: (layout: LayoutId, robotCount: number) => boolean
+  cooldownSeconds: number
   speed: SimulationSpeed
   onSpeedChange: (speed: SimulationSpeed) => void
 }) {
   const speeds: readonly SimulationSpeed[] = [0.5, 1, 2]
+  const [draftRobotCount, setDraftRobotCount] = useState(String(robotCount))
+  const [draftLayout, setDraftLayout] = useState(layout)
+  const parsedRobotCount = Number(draftRobotCount)
+  const countIsValid = Number.isInteger(parsedRobotCount) &&
+    parsedRobotCount >= MIN_ROBOT_COUNT &&
+    parsedRobotCount <= maxRobotCount
+  const environmentScale = countIsValid
+    ? getEnvironmentScale(draftLayout, parsedRobotCount)
+    : null
+  const hasChanges = parsedRobotCount !== robotCount || draftLayout !== layout
+
+  const stepRobotCount = (difference: number) => {
+    const current = Number.isInteger(parsedRobotCount) ? parsedRobotCount : robotCount
+    const next = Math.min(maxRobotCount, Math.max(MIN_ROBOT_COUNT, current + difference))
+    setDraftRobotCount(String(next))
+  }
+
+  const applyDraft = () => {
+    if (!countIsValid) return
+    onApplyEnvironment(draftLayout, parsedRobotCount)
+  }
 
   return (
     <section className="border-b border-border pb-4">
@@ -326,32 +355,38 @@ function FleetControls({
           <div>
             <div className="text-xs font-medium text-foreground">Robots</div>
             <div className="text-xs text-muted-foreground">
-              {actualRobotCount === robotCount
-                ? `${actualRobotCount} in fleet`
-                : `${actualRobotCount} present · target ${robotCount}`}
+              {actualRobotCount} running · maximum {maxRobotCount}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="icon-sm"
-              onClick={() => onRobotCountChange(robotCount - 1)}
-              disabled={robotCount <= 1}
-              aria-label="Remove robot"
-              title="Remove robot"
+              onClick={() => stepRobotCount(-1)}
+              disabled={countIsValid && parsedRobotCount <= MIN_ROBOT_COUNT}
+              aria-label="Decrease robot count"
+              title="Decrease robot count"
             >
               <Minus />
             </Button>
-            <output className="w-8 text-center text-sm font-semibold tabular-nums">
-              {robotCount}
-            </output>
+            <input
+              type="number"
+              min={MIN_ROBOT_COUNT}
+              max={maxRobotCount}
+              step={1}
+              value={draftRobotCount}
+              onChange={(event) => setDraftRobotCount(event.target.value)}
+              aria-label="Robot count"
+              aria-invalid={!countIsValid}
+              className="h-7 w-14 rounded-md border border-border bg-background px-1 text-center font-mono text-sm tabular-nums text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 aria-invalid:border-destructive"
+            />
             <Button
               variant="outline"
               size="icon-sm"
-              onClick={() => onRobotCountChange(robotCount + 1)}
-              disabled={robotCount >= maxRobotCount || !canAddRobot}
-              aria-label="Add robot"
-              title="Add robot"
+              onClick={() => stepRobotCount(1)}
+              disabled={countIsValid && parsedRobotCount >= maxRobotCount}
+              aria-label="Increase robot count"
+              title="Increase robot count"
             >
               <Plus />
             </Button>
@@ -359,10 +394,10 @@ function FleetControls({
         </div>
 
         <label className="block">
-          <span className="block text-xs font-medium text-foreground mb-1">Layout</span>
+          <span className="block text-xs font-medium text-foreground mb-1">Warehouse density</span>
           <select
-            value={layout}
-            onChange={(event) => onLayoutChange(event.target.value as LayoutId)}
+            value={draftLayout}
+            onChange={(event) => setDraftLayout(event.target.value as LayoutId)}
             className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
           >
             {layouts.map((preset) => (
@@ -370,6 +405,25 @@ function FleetControls({
             ))}
           </select>
         </label>
+
+        <div className="border-y border-border py-2 text-[11px] text-muted-foreground">
+          {environmentScale ? (
+            <span>
+              {environmentScale.gridSize}×{environmentScale.gridSize} cells · {environmentScale.shelfCount} shelves · {environmentScale.dockCount} docks
+            </span>
+          ) : (
+            <span className="text-destructive">Enter a whole number from {MIN_ROBOT_COUNT} to {maxRobotCount}</span>
+          )}
+        </div>
+
+        <Button
+          variant="default"
+          onClick={applyDraft}
+          disabled={!countIsValid || !hasChanges || cooldownSeconds > 0}
+          className="w-full"
+        >
+          {cooldownSeconds > 0 ? `Apply in ${cooldownSeconds}s` : 'Apply environment'}
+        </Button>
 
         <div>
           <div className="text-xs font-medium text-foreground mb-1">Simulation Speed</div>

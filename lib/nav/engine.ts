@@ -1,6 +1,6 @@
 import { spaceTimeAStar } from './astar'
 import { ClaimRegistry } from './claims'
-import { assertConfig, createWarehouseConfig } from './config'
+import { MAX_ROBOT_COUNT, MIN_ROBOT_COUNT, assertConfig, createWarehouseConfig } from './config'
 import { GridMap } from './grid'
 import { ReservationTable } from './reservations'
 import { Rng } from './rng'
@@ -61,6 +61,7 @@ export class NavigationEngine {
   private nextRobotId = 1
   private desiredRobotCount: number
   private completedOrders = 0
+  private completedTransfers = 0
   private orderCompletionTicks: number[] = []
   private cycleTimesTicks: number[] = []
   private nextEventId = 0
@@ -100,6 +101,7 @@ export class NavigationEngine {
       tick: this.tick,
       robots,
       completedOrders: this.completedOrders,
+      completedTransfers: this.completedTransfers,
       deliveriesLast60Seconds: this.deliveriesInThroughputWindow(),
       avgCycleSeconds: this.averageCycleSeconds(),
       cycleSampleCount: this.cycleTimesTicks.length,
@@ -107,7 +109,6 @@ export class NavigationEngine {
       speed: this.speed,
       layoutId: this.config.layoutId,
       desiredRobotCount: this.desiredRobotCount,
-      canAddRobot: this.desiredRobotCount < this.config.spawnCells.length && this.findFreeSpawn() !== undefined,
     }
   }
 
@@ -174,18 +175,18 @@ export class NavigationEngine {
   }
 
   setRobotCount(count: number): void {
-    if (!Number.isInteger(count) || count < 1 || count > this.config.spawnCells.length) {
-      throw new RangeError(`robot count must be between 1 and ${this.config.spawnCells.length}`)
-    }
-    this.desiredRobotCount = count
-    this.config.robotCount = count
-    this.reconcileRobotCount(true)
-    this.emitSnapshot()
+    this.configureEnvironment(this.config.layoutId, count)
   }
 
   setLayout(layoutId: LayoutId): void {
-    const nextConfig = createWarehouseConfig(layoutId, this.desiredRobotCount)
-    this.rebuild(nextConfig)
+    this.configureEnvironment(layoutId, this.desiredRobotCount)
+  }
+
+  configureEnvironment(layoutId: LayoutId, robotCount: number): void {
+    if (!Number.isInteger(robotCount) || robotCount < MIN_ROBOT_COUNT || robotCount > MAX_ROBOT_COUNT) {
+      throw new RangeError(`robot count must be between ${MIN_ROBOT_COUNT} and ${MAX_ROBOT_COUNT}`)
+    }
+    this.rebuild(createWarehouseConfig(layoutId, robotCount))
   }
 
   reset(): void {
@@ -210,6 +211,7 @@ export class NavigationEngine {
     this.generation++
     this.nextRobotId = 1
     this.completedOrders = 0
+    this.completedTransfers = 0
     this.orderCompletionTicks = []
     this.cycleTimesTicks = []
     this.nextEventId = 0
@@ -271,8 +273,16 @@ export class NavigationEngine {
         if (robot.remainingTaskTicks <= 0) {
           robot.hasCargo = true
           this.emitEvent('activity', 'info', `Robot #${robot.id} picked items`, robot.id)
-          this.beginDockRequest(robot, 'dock_delivery')
+          if (robot.jobDestination === 'shelf') {
+            this.beginShelfDropRequest(robot)
+          } else {
+            this.beginDockRequest(robot, 'dock_delivery')
+          }
         }
+        break
+      case 'dropping_off':
+        robot.remainingTaskTicks--
+        if (robot.remainingTaskTicks <= 0) this.completeTransfer(robot)
         break
       case 'delivering':
         robot.remainingTaskTicks--
@@ -339,6 +349,16 @@ export class NavigationEngine {
           this.emitEvent('activity', 'info', `Robot #${robot.id} started picking`, robot.id)
         }
         break
+      case 'to_shelf_drop':
+        robot.kind = 'dropping_off'
+        robot.remainingTaskTicks = this.config.shelfDropDurationTicks
+        this.emitEvent(
+          'activity',
+          'info',
+          `Robot #${robot.id} started shelf drop-off at ${robot.destinationShelfId}`,
+          robot.id
+        )
+        break
       case 'to_dock':
         robot.kind = 'delivering'
         robot.remainingTaskTicks = this.config.deliverDurationTicks
@@ -354,8 +374,7 @@ export class NavigationEngine {
     robot.hasCargo = false
     this.completedOrders++
     this.orderCompletionTicks.push(this.tick)
-    this.cycleTimesTicks.push(this.tick - robot.cycleStartTick)
-    if (this.cycleTimesTicks.length > this.config.maxCycleSamples) this.cycleTimesTicks.shift()
+    this.recordCycleTime(robot)
     this.emitEvent(
       'activity',
       'info',
@@ -372,6 +391,30 @@ export class NavigationEngine {
     }
   }
 
+  private completeTransfer(robot: RobotRuntimeState): void {
+    robot.hasCargo = false
+    this.completedTransfers++
+    this.recordCycleTime(robot)
+    this.emitEvent(
+      'activity',
+      'info',
+      `Robot #${robot.id} completed shelf transfer #${this.completedTransfers} at ${robot.destinationShelfId}`,
+      robot.id
+    )
+    this.releaseShelfClaims(robot)
+    if (robot.needsCharge || robot.battery <= this.config.battery.lowThreshold) {
+      robot.needsCharge = true
+      this.beginDockRequest(robot, 'dock_charge')
+    } else {
+      this.beginShelfRequest(robot)
+    }
+  }
+
+  private recordCycleTime(robot: RobotRuntimeState): void {
+    this.cycleTimesTicks.push(this.tick - robot.cycleStartTick)
+    if (this.cycleTimesTicks.length > this.config.maxCycleSamples) this.cycleTimesTicks.shift()
+  }
+
   private handleLowBattery(robot: RobotRuntimeState): void {
     if (robot.kind === 'charging' || robot.battery > this.config.battery.lowThreshold) return
     robot.needsCharge = true
@@ -386,10 +429,7 @@ export class NavigationEngine {
       return
     }
 
-    if (robot.shelfId !== undefined) {
-      this.claims.releaseShelf(robot.shelfId, robot.id)
-      robot.shelfId = undefined
-    }
+    this.releaseShelfClaims(robot)
     this.emitEvent(
       'alert',
       'warning',
@@ -400,9 +440,19 @@ export class NavigationEngine {
   }
 
   private beginShelfRequest(robot: RobotRuntimeState): void {
-    robot.planIntent = 'shelf'
+    this.releaseShelfClaims(robot)
+    robot.jobDestination = this.config.shelves.length > 1 &&
+      this.rng.next() < this.config.transferProbability
+      ? 'shelf'
+      : 'dock'
+    robot.planIntent = 'shelf_pickup'
     robot.kind = 'wait_path'
-    robot.shelfId = undefined
+    this.resetWaitingState(robot)
+  }
+
+  private beginShelfDropRequest(robot: RobotRuntimeState): void {
+    robot.planIntent = 'shelf_drop'
+    robot.kind = 'wait_path'
     this.resetWaitingState(robot)
   }
 
@@ -421,9 +471,23 @@ export class NavigationEngine {
 
   private prepareResourceClaims(): void {
     for (const robot of [...this.robots.values()].sort((first, second) => first.id - second.id)) {
-      if (robot.planIntent === 'shelf' && robot.shelfId === undefined) {
+      if (robot.planIntent === 'shelf_pickup' && robot.shelfId === undefined) {
         const shelf = this.rng.pick(this.claims.availableShelves(this.config.shelves))
         if (shelf && this.claims.claimShelf(shelf.id, robot.id)) robot.shelfId = shelf.id
+      }
+
+      if (
+        robot.jobDestination === 'shelf' &&
+        robot.shelfId !== undefined &&
+        robot.destinationShelfId === undefined
+      ) {
+        const destination = this.rng.pick(
+          this.claims.availableShelves(this.config.shelves)
+            .filter((shelf) => shelf.id !== robot.shelfId)
+        )
+        if (destination && this.claims.claimShelf(destination.id, robot.id)) {
+          robot.destinationShelfId = destination.id
+        }
       }
 
       if (
@@ -468,9 +532,9 @@ export class NavigationEngine {
       horizon: this.config.horizon,
     })
 
-    if (!plan || !this.reservations.commitPath(plan.path, robot.id)) {
+    if (!plan || !this.reservations.commitPath(plan.path, robot.id, plan.arrivalTick)) {
       if (routeStepAt(robot.route, this.tick + 1) === undefined) {
-        robot.kind = intent === 'shelf' ? 'wait_path' : 'wait_dock'
+        robot.kind = intent === 'dock_delivery' || intent === 'dock_charge' ? 'wait_dock' : 'wait_path'
       }
       robot.retryAtTick = this.tick + robot.retryDelayTicks
       robot.retryDelayTicks = Math.min(
@@ -490,27 +554,29 @@ export class NavigationEngine {
     robot.planFailureWarned = false
     robot.retryDelayTicks = this.config.retryBackoff.initialTicks
 
-    if (intent === 'shelf') {
+    if (intent === 'shelf_pickup') {
       robot.kind = 'to_shelf'
       robot.cycleStartTick = this.tick
       if (robot.dockId !== undefined) {
         this.claims.releaseDock(robot.dockId, robot.id)
         robot.dockId = undefined
       }
+    } else if (intent === 'shelf_drop') {
+      robot.kind = 'to_shelf_drop'
     } else {
       robot.kind = intent === 'dock_delivery' ? 'to_dock' : 'to_charge'
-      if (robot.shelfId !== undefined) {
-        this.claims.releaseShelf(robot.shelfId, robot.id)
-        robot.shelfId = undefined
-      }
+      this.releaseShelfClaims(robot)
     }
 
     if (plan.arrivalTick === this.tick) this.finishArrival(robot)
   }
 
   private goalFor(robot: RobotRuntimeState): Cell | undefined {
-    if (robot.planIntent === 'shelf') {
+    if (robot.planIntent === 'shelf_pickup') {
       return this.config.shelves.find((shelf) => shelf.id === robot.shelfId)?.pickCell
+    }
+    if (robot.planIntent === 'shelf_drop') {
+      return this.config.shelves.find((shelf) => shelf.id === robot.destinationShelfId)?.pickCell
     }
     if (robot.planIntent === 'dock_delivery' || robot.planIntent === 'dock_charge') {
       return this.config.docks.find((dock) => dock.id === robot.dockId)?.cell
@@ -520,7 +586,8 @@ export class NavigationEngine {
 
   private planPriority(robot: RobotRuntimeState): number {
     const urgency: Record<PlanIntent, number> = {
-      shelf: 0,
+      shelf_pickup: 0,
+      shelf_drop: 250,
       dock_delivery: 500,
       dock_charge: 1_000,
     }
@@ -582,6 +649,15 @@ export class NavigationEngine {
     }
   }
 
+  private releaseShelfClaims(robot: RobotRuntimeState): void {
+    if (robot.shelfId !== undefined) this.claims.releaseShelf(robot.shelfId, robot.id)
+    if (robot.destinationShelfId !== undefined) {
+      this.claims.releaseShelf(robot.destinationShelfId, robot.id)
+    }
+    robot.shelfId = undefined
+    robot.destinationShelfId = undefined
+  }
+
   private isAtDock(robot: RobotRuntimeState, dockId: number): boolean {
     const dock = this.config.docks.find((candidate) => candidate.id === dockId)
     return dock !== undefined && sameCell(robot.cell, dock.cell)
@@ -610,6 +686,7 @@ export class NavigationEngine {
       id: robot.id,
       kind: robot.kind,
       shelfId: robot.shelfId,
+      destinationShelfId: robot.destinationShelfId,
       dockId: robot.dockId,
       arrivalTick: robot.arrivalTick,
       waitingSinceTick: robot.waitingSinceTick,

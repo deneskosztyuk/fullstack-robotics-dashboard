@@ -18,12 +18,16 @@ export async function createSnapshotWorkbook(
     ['Generated at', snapshot.generatedAt],
     ['Synthetic data', snapshot.syntheticData],
     ['Layout', snapshot.simulation.layoutName],
+    ['Grid dimensions', `${snapshot.simulation.gridWidth} x ${snapshot.simulation.gridDepth} cells`],
+    ['Shelf count', snapshot.simulation.shelfCount],
+    ['Dock count', snapshot.simulation.dockCount],
     ['Simulation tick', snapshot.simulation.tick],
     ['Paused', snapshot.simulation.paused],
     ['Speed', `${snapshot.simulation.speed}x`],
     ['Desired robot count', snapshot.simulation.desiredRobotCount],
     ['Actual robot count', snapshot.simulation.actualRobotCount],
-    ['Completed orders', snapshot.stats.completedOrders],
+    ['Completed dock orders', snapshot.stats.completedOrders],
+    ['Completed shelf transfers', snapshot.stats.completedTransfers],
     ['Deliveries last 60 sim s', snapshot.metrics.deliveriesLast60SimulationSeconds],
     ['Mean cycle seconds', snapshot.metrics.meanCycleSeconds],
     ['Cycle sample count', snapshot.metrics.cycleSampleCount],
@@ -31,11 +35,13 @@ export async function createSnapshotWorkbook(
   summary['!cols'] = [{ wch: 28 }, { wch: 32 }]
 
   const fleet = XLSX.utils.aoa_to_sheet([
-    ['Robot ID', 'Status', 'Task', 'Location', 'Battery percent', 'Retiring'],
+    ['Robot ID', 'Status', 'Task', 'Origin shelf', 'Destination shelf', 'Location', 'Battery percent', 'Retiring'],
     ...snapshot.robots.map((robot) => [
       robot.id,
       robot.status,
       robot.task,
+      robot.shelfId ?? '',
+      robot.destinationShelfId ?? '',
       robot.location,
       robot.battery,
       robot.retireWhenParked,
@@ -45,11 +51,13 @@ export async function createSnapshotWorkbook(
     { wch: 12 },
     { wch: 14 },
     { wch: 24 },
+    { wch: 16 },
+    { wch: 20 },
     { wch: 24 },
     { wch: 18 },
     { wch: 12 },
   ]
-  fleet['!autofilter'] = { ref: `A1:F${snapshot.robots.length + 1}` }
+  fleet['!autofilter'] = { ref: `A1:H${snapshot.robots.length + 1}` }
 
   const events = XLSX.utils.aoa_to_sheet([
     ['Event ID', 'Simulation tick', 'Type', 'Severity', 'Robot ID', 'Message'],

@@ -53,7 +53,7 @@ export class ReservationTable {
     const parked = this.parkedByRobot.get(robot)
     if (parked) {
       const first = path[0]
-      if (first.tick < parked.fromTick || !sameCell(first, parked.cell)) return false
+      if (first.tick >= parked.fromTick && !sameCell(first, parked.cell)) return false
     }
 
     for (let index = 0; index < path.length; index++) {
@@ -70,8 +70,18 @@ export class ReservationTable {
     return true
   }
 
-  commitPath(path: TimedPath, robot: RobotId): boolean {
+  commitPath(path: TimedPath, robot: RobotId, parkFromTick?: number): boolean {
     if (!this.canCommitPath(path, robot)) return false
+
+    const parkingStep = parkFromTick === undefined
+      ? undefined
+      : path.find((step) => step.tick === parkFromTick)
+    if (
+      parkFromTick !== undefined &&
+      (!Number.isInteger(parkFromTick) || parkingStep === undefined || !this.canParkRobot(parkingStep, robot, parkFromTick))
+    ) {
+      return false
+    }
 
     const firstTick = path[0].tick
     const parked = this.parkedByRobot.get(robot)
@@ -88,6 +98,7 @@ export class ReservationTable {
         if (!sameCell(previous, step)) this.reserveEdge(previous, step, step.tick, robot)
       }
     }
+    if (parkingStep) this.parkRobot(parkingStep, robot, parkingStep.tick)
     return true
   }
 

@@ -26,11 +26,12 @@ export function DashboardLeft() {
         </h2>
         <span className="font-mono text-[11px] text-muted-foreground">SIM TICK {navigationSnapshot.tick}</span>
       </div>
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border md:grid-cols-4 xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border md:grid-cols-4 xl:grid-cols-8">
         <Metric label="Executing" value={executingCount} detail="Current state" tone="success" />
         <Metric label="Waiting" value={waitingCount} detail="Route or resource" tone="warning" />
         <Metric label="Charging" value={chargingCount} detail="Travel or charge" />
-        <Metric label="Delivered" value={navigationSnapshot.completedOrders} detail="Since reset" />
+        <Metric label="Dock deliveries" value={navigationSnapshot.completedOrders} detail="Since reset" />
+        <Metric label="Shelf transfers" value={navigationSnapshot.completedTransfers} detail="Since reset" />
         <Metric label="Last 60 sim s" value={navigationSnapshot.deliveriesLast60Seconds} detail="Completed deliveries" />
         <Metric label="Mean cycle" value={`${navigationSnapshot.avgCycleSeconds.toFixed(1)}s`} detail={cycleDetail} />
         <Metric label="Mean battery" value={`${meanBattery.toFixed(0)}%`} detail={`${robots.length} robots`} />

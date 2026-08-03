@@ -9,7 +9,7 @@ import {
 
 function createFixture(): SimulationSnapshotExport {
   return createSimulationSnapshot({
-    stats: { completedOrders: 7 },
+    stats: { completedOrders: 7, completedTransfers: 2 },
     robots: [{
       id: 2,
       status: 'executing',
@@ -17,6 +17,8 @@ function createFixture(): SimulationSnapshotExport {
       battery: 82,
       location: '=1+1',
       retireWhenParked: false,
+      shelfId: 'A',
+      destinationShelfId: 'B',
     }],
     metrics: {
       deliveriesLast60SimulationSeconds: 4,
@@ -28,6 +30,10 @@ function createFixture(): SimulationSnapshotExport {
       paused: false,
       layout: 'open',
       layoutName: 'Open floor',
+      gridWidth: 21,
+      gridDepth: 21,
+      shelfCount: 6,
+      dockCount: 4,
       speed: 1,
       desiredRobotCount: 4,
       actualRobotCount: 4,
@@ -53,6 +59,7 @@ describe('snapshot exports', () => {
     const csv = serializeFleetCsv(createFixture())
 
     expect(csv.startsWith('\uFEFFGenerated at,Synthetic data,Layout')).toBe(true)
+    expect(csv).toContain('Grid width,Grid depth,Shelf count,Dock count')
     expect(csv).toContain('"Picking, ""fragile""\nitems"')
     expect(csv).toContain("'=1+1")
     expect(csv.split('\r\n')).toHaveLength(2)

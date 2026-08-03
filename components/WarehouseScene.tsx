@@ -3,7 +3,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Box, Grid, OrbitControls, PerspectiveCamera, Sphere } from '@react-three/drei'
 import { RotateCcw } from 'lucide-react'
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { useWarehouse } from '@/lib/WarehouseContext'
 import type { RobotRenderPose, RobotSnapshot } from '@/lib/nav'
@@ -76,6 +76,7 @@ interface RobotProps {
   robot: RobotSnapshot
   getPose: (id: number) => RobotRenderPose | undefined
   selected: boolean
+  showTaskLabel: boolean
   onSelect: (id: number) => void
 }
 
@@ -112,15 +113,30 @@ function RenderHeartbeat({ onFirstFrame }: { onFirstFrame: () => void }) {
   return null
 }
 
-function ResponsiveCamera() {
+function ResponsiveCamera({ halfExtent }: { halfExtent: number }) {
   const { size } = useThree()
+  const cameraRef = useRef<THREE.PerspectiveCamera>(null)
   const portrait = size.width / size.height < 0.9
-  const position: [number, number, number] = portrait ? [18, 18, 18] : [12, 13, 14]
+  const distance = halfExtent * (portrait ? 2.5 : 1.75)
+  const position: [number, number, number] = [distance, distance, distance]
 
-  return <PerspectiveCamera makeDefault position={position} fov={portrait ? 50 : 38} />
+  useLayoutEffect(() => {
+    cameraRef.current?.lookAt(0, 0, 0)
+    cameraRef.current?.updateProjectionMatrix()
+  }, [distance, portrait])
+
+  return (
+    <PerspectiveCamera
+      ref={cameraRef}
+      key={`${halfExtent}-${portrait ? 'portrait' : 'landscape'}`}
+      makeDefault
+      position={position}
+      fov={portrait ? 50 : 38}
+    />
+  )
 }
 
-function Robot({ robot, getPose, selected, onSelect }: RobotProps) {
+function Robot({ robot, getPose, selected, showTaskLabel, onSelect }: RobotProps) {
   const ref = useRef<THREE.Group>(null)
 
   useFrame((_, delta) => {
@@ -155,7 +171,7 @@ function Robot({ robot, getPose, selected, onSelect }: RobotProps) {
       <RobotBody />
       <RobotWheels />
       <RobotCargo loaded={robot.hasCargo} />
-      <RobotLabels robot={robot} selected={selected} />
+      <RobotLabels robot={robot} selected={selected} showTaskLabel={showTaskLabel} />
     </group>
   )
 }
@@ -260,7 +276,15 @@ function LabelSprite({
   )
 }
 
-function RobotLabels({ robot, selected }: { robot: RobotSnapshot; selected: boolean }) {
+function RobotLabels({
+  robot,
+  selected,
+  showTaskLabel,
+}: {
+  robot: RobotSnapshot
+  selected: boolean
+  showTaskLabel: boolean
+}) {
   const color = selected ? SELECTION_COLOR : LABEL_COLOR
 
   return (
@@ -271,12 +295,14 @@ function RobotLabels({ robot, selected }: { robot: RobotSnapshot; selected: bool
         color={color}
         height={0.26}
       />
-      <LabelSprite
-        text={robot.retireWhenParked ? 'RETIRING' : robot.taskLabel.toUpperCase()}
-        position={[0, 1.5, 0]}
-        color={color}
-        height={0.14}
-      />
+      {(selected || showTaskLabel) && (
+        <LabelSprite
+          text={robot.retireWhenParked ? 'RETIRING' : robot.taskLabel.toUpperCase()}
+          position={[0, 1.5, 0]}
+          color={color}
+          height={0.14}
+        />
+      )}
     </>
   )
 }
@@ -353,13 +379,18 @@ export default function WarehouseScene() {
   const width = config.grid.maxX - config.grid.minX
   const depth = config.grid.maxZ - config.grid.minZ
   const gridSize = Math.max(width, depth)
-  const selectedTarget = selectedRobot?.shelfId
-    ? config.shelves.find((shelf) => shelf.id === selectedRobot.shelfId)?.pickCell
+  const halfExtent = gridSize / 2
+  const showAllTaskLabels = navigationSnapshot.robots.length <= 24
+  const selectedShelfTargetId = selectedRobot?.kind === 'to_shelf_drop' || selectedRobot?.kind === 'dropping_off'
+    ? selectedRobot.destinationShelfId
+    : selectedRobot?.shelfId
+  const selectedTarget = selectedShelfTargetId
+    ? config.shelves.find((shelf) => shelf.id === selectedShelfTargetId)?.pickCell
     : selectedRobot?.dockId !== undefined
       ? config.docks.find((dock) => dock.id === selectedRobot.dockId)?.cell
       : undefined
-  const selectedTargetLabel = selectedRobot?.shelfId
-    ? `TARGET ${selectedRobot.shelfId}`
+  const selectedTargetLabel = selectedShelfTargetId
+    ? `TARGET ${selectedShelfTargetId}`
     : selectedRobot?.dockId !== undefined
       ? `TARGET D${selectedRobot.dockId}`
       : null
@@ -406,7 +437,7 @@ export default function WarehouseScene() {
           style={{ width: '100%', height: '100%', display: 'block' }}
         >
           <RenderHeartbeat onFirstFrame={handleFirstFrame} />
-          <ResponsiveCamera />
+          <ResponsiveCamera halfExtent={halfExtent} />
           <color attach="background" args={[SCENE_BG_COLOR]} />
           <SceneLighting />
           <Grid
@@ -433,6 +464,7 @@ export default function WarehouseScene() {
               robot={robot}
               getPose={getRobotPose}
               selected={robot.id === selectedRobotId}
+              showTaskLabel={showAllTaskLabels}
               onSelect={selectRobot}
             />
           ))}
@@ -447,8 +479,8 @@ export default function WarehouseScene() {
             enablePan
             enableZoom
             enableRotate
-            minDistance={8}
-            maxDistance={30}
+            minDistance={Math.max(8, halfExtent * 0.8)}
+            maxDistance={Math.max(30, halfExtent * 4)}
           />
         </Canvas>
       </SceneErrorBoundary>
