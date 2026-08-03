@@ -2,7 +2,8 @@
 
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Box, Grid, OrbitControls, Sphere, Text } from '@react-three/drei'
-import { useRef } from 'react'
+import { RotateCcw } from 'lucide-react'
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { useWarehouse } from '@/lib/WarehouseContext'
 import type { RobotRenderPose, RobotSnapshot } from '@/lib/nav'
@@ -24,10 +25,44 @@ const WHEEL_COLOR = '#111827'
 const SCENE_BG_COLOR = '#0a0a0a'
 const LIGHT_PRIMARY_COLOR = '#3b82f6'
 const LIGHT_NEUTRAL_COLOR = '#6b7280'
+const FRAME_TIMEOUT_MESSAGE = 'The browser did not execute the 3D animation frame.'
 
 interface RobotProps {
   robot: RobotSnapshot
   getPose: (id: number) => RobotRenderPose | undefined
+}
+
+interface SceneErrorBoundaryProps {
+  children: ReactNode
+  onError: (message: string) => void
+}
+
+class SceneErrorBoundary extends Component<SceneErrorBoundaryProps, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: Error) {
+    this.props.onError(error.message)
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children
+  }
+}
+
+function RenderHeartbeat({ onFirstFrame }: { onFirstFrame: () => void }) {
+  const rendered = useRef(false)
+
+  useFrame(() => {
+    if (rendered.current) return
+    rendered.current = true
+    onFirstFrame()
+  })
+
+  return null
 }
 
 function Robot({ robot, getPose }: RobotProps) {
@@ -151,48 +186,99 @@ function DockingStation({ id, position }: { id: number; position: [number, numbe
 
 export default function WarehouseScene() {
   const { config, getRobotPose, navigationSnapshot } = useWarehouse()
+  const [rendererFailure, setRendererFailure] = useState<string | null>(null)
+  const [canvasKey, setCanvasKey] = useState(0)
+  const firstFrameRendered = useRef(false)
   const width = config.grid.maxX - config.grid.minX
   const depth = config.grid.maxZ - config.grid.minZ
   const gridSize = Math.max(width, depth)
 
+  useEffect(() => {
+    const watchdog = setTimeout(() => {
+      if (!firstFrameRendered.current) {
+        setRendererFailure(FRAME_TIMEOUT_MESSAGE)
+      }
+    }, 3000)
+
+    return () => clearTimeout(watchdog)
+  }, [canvasKey])
+
+  const handleCreated = useCallback(({ gl }: { gl: THREE.WebGLRenderer }) => {
+    gl.domElement.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault()
+      setRendererFailure('The browser lost the WebGL graphics context.')
+    }, { once: true })
+  }, [])
+
+  const handleFirstFrame = useCallback(() => {
+    firstFrameRendered.current = true
+    setRendererFailure((current) => current === FRAME_TIMEOUT_MESSAGE ? null : current)
+  }, [])
+
+  const retryRenderer = () => {
+    firstFrameRendered.current = false
+    setRendererFailure(null)
+    setCanvasKey((current) => current + 1)
+  }
+
   return (
-    <div className="w-full h-full">
-      <Canvas
-        camera={{ position: [15, 15, 15], fov: 50 }}
-        style={{ width: '100%', height: '100%', display: 'block' }}
-      >
-        <color attach="background" args={[SCENE_BG_COLOR]} />
-        <SceneLighting />
-        <Grid
-          args={[gridSize, gridSize]}
-          cellColor={GRID_CELL_COLOR}
-          sectionColor={GRID_SECTION_COLOR}
-          fadeDistance={30}
-          fadeStrength={1}
-        />
-
-        {config.docks.map((dock) => (
-          <DockingStation
-            key={dock.id}
-            id={dock.id}
-            position={[dock.cell.x, 0, dock.cell.z]}
+    <div className="relative w-full h-full">
+      <SceneErrorBoundary key={canvasKey} onError={setRendererFailure}>
+        <Canvas
+          camera={{ position: [15, 15, 15], fov: 50 }}
+          dpr={[1, 1.5]}
+          gl={{ antialias: false, powerPreference: 'default' }}
+          onCreated={handleCreated}
+          style={{ width: '100%', height: '100%', display: 'block' }}
+        >
+          <RenderHeartbeat onFirstFrame={handleFirstFrame} />
+          <color attach="background" args={[SCENE_BG_COLOR]} />
+          <SceneLighting />
+          <Grid
+            args={[gridSize, gridSize]}
+            cellColor={GRID_CELL_COLOR}
+            sectionColor={GRID_SECTION_COLOR}
+            fadeDistance={30}
+            fadeStrength={1}
           />
-        ))}
-        {config.shelves.map((shelf) => (
-          <Shelf key={shelf.id} position={[shelf.cell.x, 0, shelf.cell.z]} />
-        ))}
-        {navigationSnapshot.robots.map((robot) => (
-          <Robot key={robot.id} robot={robot} getPose={getRobotPose} />
-        ))}
 
-        <OrbitControls
-          enablePan
-          enableZoom
-          enableRotate
-          minDistance={8}
-          maxDistance={30}
-        />
-      </Canvas>
+          {config.docks.map((dock) => (
+            <DockingStation
+              key={dock.id}
+              id={dock.id}
+              position={[dock.cell.x, 0, dock.cell.z]}
+            />
+          ))}
+          {config.shelves.map((shelf) => (
+            <Shelf key={shelf.id} position={[shelf.cell.x, 0, shelf.cell.z]} />
+          ))}
+          {navigationSnapshot.robots.map((robot) => (
+            <Robot key={robot.id} robot={robot} getPose={getRobotPose} />
+          ))}
+
+          <OrbitControls
+            enablePan
+            enableZoom
+            enableRotate
+            minDistance={8}
+            maxDistance={30}
+          />
+        </Canvas>
+      </SceneErrorBoundary>
+      {rendererFailure && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-card p-6 text-center">
+          <p className="text-sm font-medium text-foreground">3D renderer unavailable</p>
+          <p className="max-w-sm text-xs text-muted-foreground">{rendererFailure}</p>
+          <button
+            type="button"
+            onClick={retryRenderer}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
+          >
+            <RotateCcw className="size-4" />
+            Retry renderer
+          </button>
+        </div>
+      )}
     </div>
   )
 }
