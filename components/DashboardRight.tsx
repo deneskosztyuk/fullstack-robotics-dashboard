@@ -1,21 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import { useWarehouse, WarehouseEvent } from '@/lib/WarehouseContext'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Download, Minus, Pause, Play, Plus, RotateCcw } from 'lucide-react'
-import type { LayoutId, SimulationSpeed } from '@/lib/nav'
+import type { LayoutId, RobotSnapshot, SimulationSpeed } from '@/lib/nav'
 
 const BATTERY_HIGH_THRESHOLD = 70
 const BATTERY_MEDIUM_THRESHOLD = 40
-const MAX_DISPLAYED_ALERTS = 3
-const MAX_DISPLAYED_ACTIVITIES = 4
-const RELATIVE_TIME_TICK_MS = 1000
+const MAX_DISPLAYED_EVENTS = 8
 
-interface AlertItemProps {
-  alert: WarehouseEvent
-  now: number
+interface EventItemProps {
+  event: WarehouseEvent
+  currentTick: number
+  tickMs: number
 }
 
 interface RobotCardProps {
@@ -26,11 +24,8 @@ interface RobotCardProps {
     location: string
     battery: number
   }
-}
-
-interface ActivityItemProps {
-  activity: WarehouseEvent
-  now: number
+  selected: boolean
+  onSelect: (id: number) => void
 }
 
 const ALERT_BORDER = {
@@ -45,15 +40,11 @@ const ALERT_TEXT = {
   error: 'text-destructive',
 }
 
-function formatRelativeTime(timestamp: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000))
-  if (seconds < 60) return `${seconds}s ago`
+function formatSimulationAge(eventTick: number, currentTick: number, tickMs: number): string {
+  const seconds = Math.max(0, Math.floor((currentTick - eventTick) * tickMs / 1000))
+  if (seconds < 60) return `${seconds} sim s ago`
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  return `${minutes} sim min ago`
 }
 
 export function DashboardRight() {
@@ -61,7 +52,8 @@ export function DashboardRight() {
     robots,
     events,
     stats,
-    efficiencyHistory,
+    navigationSnapshot,
+    config,
     paused,
     togglePause,
     reset,
@@ -75,29 +67,24 @@ export function DashboardRight() {
     setLayout,
     speed,
     setSpeed,
+    selectedRobot,
+    selectedRobotId,
+    selectRobot,
   } = useWarehouse()
-  const [now, setNow] = useState(() => Date.now())
+  const selectedRobotStatus = robots.find((robot) => robot.id === selectedRobotId)?.status ?? 'waiting'
+  const recentEvents = events.slice(-MAX_DISPLAYED_EVENTS).reverse()
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), RELATIVE_TIME_TICK_MS)
-    return () => clearInterval(timer)
-  }, [])
-
-  const alerts = events
-    .filter(e => e.kind === 'alert')
-    .slice(-MAX_DISPLAYED_ALERTS)
-    .reverse()
-  const activities = events
-    .filter(e => e.kind === 'activity')
-    .slice(-MAX_DISPLAYED_ACTIVITIES)
-    .reverse()
-
-  const handleGenerateReport = () => {
+  const handleExportSnapshot = () => {
     const report = {
       generatedAt: new Date().toISOString(),
+      syntheticData: true,
       stats,
       robots,
-      efficiencyHistory,
+      metrics: {
+        deliveriesLast60SimulationSeconds: navigationSnapshot.deliveriesLast60Seconds,
+        meanCycleSeconds: navigationSnapshot.avgCycleSeconds,
+        cycleSampleCount: navigationSnapshot.cycleSampleCount,
+      },
       simulation: {
         layout,
         speed,
@@ -110,7 +97,7 @@ export function DashboardRight() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `warehouse-report-${Date.now()}.json`
+    a.download = `amr-simulation-snapshot-${Date.now()}.json`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -119,6 +106,15 @@ export function DashboardRight() {
 
   return (
     <div className="h-full overflow-y-auto px-4 pt-4 pb-4 space-y-4">
+
+      {selectedRobot && (
+        <RobotInspector
+          robot={selectedRobot}
+          status={selectedRobotStatus}
+          currentTick={navigationSnapshot.tick}
+          tickMs={config.tickMs}
+        />
+      )}
 
       <FleetControls
         robotCount={robotCount}
@@ -133,54 +129,111 @@ export function DashboardRight() {
         onSpeedChange={setSpeed}
       />
 
-      <section>
-        <h3 className="font-semibold mb-2 text-foreground text-sm">
-          System Alerts
-        </h3>
-        <div className="space-y-1">
-          {alerts.length === 0 ? (
-            <div className="p-2 rounded border text-xs border-border text-muted-foreground bg-muted/30">
-              No alerts
-            </div>
-          ) : (
-            alerts.map(alert => (
-              <AlertItem key={alert.id} alert={alert} now={now} />
-            ))
-          )}
-        </div>
-      </section>
+      <ControlButtons
+        onPause={togglePause}
+        onReset={reset}
+        onExportSnapshot={handleExportSnapshot}
+        paused={paused}
+      />
 
       <section>
-        <h3 className="font-semibold mb-2 text-foreground text-sm">Robot Fleet Status</h3>
+        <h3 className="mb-2 text-sm font-semibold text-foreground">Fleet</h3>
         <div className="space-y-1.5">
           {robots.map(robot => (
-            <RobotCard key={robot.id} robot={robot} />
+            <RobotCard
+              key={robot.id}
+              robot={robot}
+              selected={robot.id === selectedRobotId}
+              onSelect={selectRobot}
+            />
           ))}
         </div>
       </section>
 
-      <section>
-        <h3 className="font-semibold mb-2 text-foreground text-sm">Recent Activity</h3>
+      <section className="border-t border-border pt-4">
+        <h3 className="mb-2 text-sm font-semibold text-foreground">Event log</h3>
         <div className="space-y-1 text-xs">
-          {activities.length === 0 ? (
-            <div className="p-2 rounded text-muted-foreground bg-muted/30">
-              No recent activity
-            </div>
+          {recentEvents.length === 0 ? (
+            <div className="py-2 text-muted-foreground">No events yet</div>
           ) : (
-            activities.map(activity => (
-              <ActivityItem key={activity.id} activity={activity} now={now} />
+            recentEvents.map((event) => (
+              <EventItem
+                key={event.id}
+                event={event}
+                currentTick={navigationSnapshot.tick}
+                tickMs={config.tickMs}
+              />
             ))
           )}
         </div>
       </section>
 
-      <ControlButtons
-        onPause={togglePause}
-        onReset={reset}
-        onGenerateReport={handleGenerateReport}
-        paused={paused}
-      />
+    </div>
+  )
+}
 
+function RobotInspector({
+  robot,
+  status,
+  currentTick,
+  tickMs,
+}: {
+  robot: RobotSnapshot
+  status: string
+  currentTick: number
+  tickMs: number
+}) {
+  const isWaiting = robot.kind === 'idle' || robot.kind === 'wait_path' || robot.kind === 'wait_dock'
+  const waitingSeconds = Math.max(0, (currentTick - robot.waitingSinceTick) * tickMs / 1000)
+  const arrivalSeconds = robot.arrivalTick === undefined
+    ? null
+    : Math.max(0, (robot.arrivalTick - currentTick) * tickMs / 1000)
+  const assignment = robot.shelfId
+    ? `Shelf ${robot.shelfId}`
+    : robot.dockId !== undefined
+      ? `Dock D${robot.dockId}`
+      : 'No claimed resource'
+
+  return (
+    <section aria-labelledby="selected-robot-heading" className="border-b border-border pb-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-medium uppercase text-muted-foreground">Selected unit</div>
+          <h2 id="selected-robot-heading" className="mt-1 font-mono text-xl font-semibold text-foreground">
+            AMR-{String(robot.id).padStart(2, '0')}
+          </h2>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+
+      <div className="mt-4 divide-y divide-border border-y border-border text-xs">
+        <InspectorRow label="Task" value={robot.retireWhenParked ? 'Retiring after task' : robot.taskLabel} />
+        <InspectorRow label="Assignment" value={assignment} />
+        <InspectorRow label="Grid cell" value={`${robot.cell.x}, ${robot.cell.z}`} mono />
+        <InspectorRow label="Battery" value={`${Math.round(robot.battery)}%`} mono />
+        <InspectorRow label="Payload" value={robot.hasCargo ? 'Loaded' : 'Empty'} />
+        {arrivalSeconds !== null && <InspectorRow label="Planned arrival" value={`${arrivalSeconds.toFixed(1)} sim s`} mono />}
+        {isWaiting && <InspectorRow label="Waiting" value={`${waitingSeconds.toFixed(1)} sim s`} mono />}
+      </div>
+    </section>
+  )
+}
+
+function InspectorRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`truncate text-right text-foreground ${mono ? 'font-mono tabular-nums' : ''}`} title={value}>
+        {value}
+      </span>
     </div>
   )
 }
@@ -211,16 +264,16 @@ function FleetControls({
   const speeds: readonly SimulationSpeed[] = [0.5, 1, 2]
 
   return (
-    <section>
-      <h3 className="font-semibold mb-2 text-foreground text-sm">Fleet Controls</h3>
-      <div className="space-y-3 bg-muted/30 border border-border rounded-lg p-3">
+    <section className="border-b border-border pb-4">
+      <h3 className="mb-3 text-sm font-semibold text-foreground">Simulation controls</h3>
+      <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-xs font-medium text-foreground">Robots</div>
             <div className="text-xs text-muted-foreground">
               {actualRobotCount === robotCount
-                ? `${actualRobotCount} active`
-                : `${actualRobotCount} active · target ${robotCount}`}
+                ? `${actualRobotCount} in fleet`
+                : `${actualRobotCount} present · target ${robotCount}`}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -284,7 +337,7 @@ function FleetControls({
   )
 }
 
-function RobotCard({ robot }: RobotCardProps) {
+function RobotCard({ robot, selected, onSelect }: RobotCardProps) {
   const getBatteryColor = (battery: number) => {
     if (battery > BATTERY_HIGH_THRESHOLD) return 'bg-success'
     if (battery > BATTERY_MEDIUM_THRESHOLD) return 'bg-warning'
@@ -292,7 +345,16 @@ function RobotCard({ robot }: RobotCardProps) {
   }
 
   return (
-    <div className="bg-muted/30 p-2.5 rounded-lg border border-border hover:border-primary/50 transition-colors">
+    <button
+      type="button"
+      onClick={() => onSelect(robot.id)}
+      aria-pressed={selected}
+      className={`w-full p-2.5 text-left transition-colors ${
+        selected
+          ? 'border-l-2 border-primary bg-primary/10'
+          : 'border-l-2 border-transparent bg-muted/20 hover:bg-muted/40'
+      }`}
+    >
       <div className="flex justify-between items-center mb-1.5">
         <span className="font-semibold text-foreground text-sm">Robot #{robot.id}</span>
         <StatusBadge status={robot.status} />
@@ -310,18 +372,21 @@ function RobotCard({ robot }: RobotCardProps) {
         </div>
         <span className="text-xs text-muted-foreground w-10">{robot.battery}%</span>
       </div>
-    </div>
+    </button>
   )
 }
 
-function ActivityItem({ activity, now }: ActivityItemProps) {
+function EventItem({ event, currentTick, tickMs }: EventItemProps) {
+  const isAlert = event.kind === 'alert'
+
   return (
-    <div className="bg-muted/30 p-2 rounded flex justify-between items-center">
-      <div>
-        <span className="text-primary font-semibold">R{activity.robot}</span>
-        <span className="text-foreground ml-2">{activity.message}</span>
+    <div className={`border-l-2 py-1.5 pl-2 ${isAlert ? ALERT_BORDER[event.severity] : 'border-border'}`}>
+      <div className={isAlert ? ALERT_TEXT[event.severity] : 'text-foreground'}>
+        {event.message}
       </div>
-      <span className="text-muted-foreground text-xs">{formatRelativeTime(activity.timestamp, now)}</span>
+      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+        {formatSimulationAge(event.tick, currentTick, tickMs)}
+      </div>
     </div>
   )
 }
@@ -329,12 +394,12 @@ function ActivityItem({ activity, now }: ActivityItemProps) {
 function ControlButtons({
   onPause,
   onReset,
-  onGenerateReport,
+  onExportSnapshot,
   paused
 }: {
   onPause: () => void
   onReset: () => void
-  onGenerateReport: () => void
+  onExportSnapshot: () => void
   paused: boolean
 }) {
   return (
@@ -349,24 +414,10 @@ function ControlButtons({
           Reset
         </Button>
       </div>
-      <Button variant="default" onClick={onGenerateReport} className="w-full mt-3">
+      <Button variant="default" onClick={onExportSnapshot} className="w-full mt-3">
         <Download data-icon="inline-start" />
-        Generate Report
+        Export snapshot
       </Button>
     </section>
-  )
-}
-
-function AlertItem({ alert, now }: AlertItemProps) {
-  return (
-    <div className={`p-2 rounded border text-xs ${ALERT_BORDER[alert.severity]}`}>
-      <div className="flex items-start gap-2">
-        <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${ALERT_TEXT[alert.severity].replace('text-', 'bg-')}`} />
-        <div className="flex-1">
-          <div className={`font-medium ${ALERT_TEXT[alert.severity]}`}>{alert.message}</div>
-          <div className="text-xs text-muted-foreground mt-0.5">{formatRelativeTime(alert.timestamp, now)}</div>
-        </div>
-      </div>
-    </div>
   )
 }

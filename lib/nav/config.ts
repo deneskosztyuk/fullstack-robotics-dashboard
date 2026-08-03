@@ -22,9 +22,9 @@ export interface ValidationResult {
 }
 
 export const LAYOUT_PRESETS: readonly LayoutPreset[] = [
-  { id: 'open', name: 'Open' },
-  { id: 'aisles', name: 'Aisles' },
-  { id: 'dense', name: 'Dense' },
+  { id: 'open', name: 'Open floor' },
+  { id: 'aisles', name: 'Parallel aisles' },
+  { id: 'dense', name: 'High density' },
 ]
 
 export const DEFAULT_LAYOUT_ID: LayoutId = 'open'
@@ -74,11 +74,11 @@ function buildShelves(columns: readonly number[], zValues: readonly number[]): S
 function layoutDefinition(layoutId: LayoutId): { name: string; shelves: ShelfConfig[] } {
   switch (layoutId) {
     case 'open':
-      return { name: 'Open', shelves: buildShelves([8, -8], [0, 3, -3]) }
+      return { name: 'Open floor', shelves: buildShelves([8, -8], [0, 3, -3]) }
     case 'aisles':
-      return { name: 'Aisles', shelves: buildShelves([8, -8], [-6, -3, 0, 3, 6]) }
+      return { name: 'Parallel aisles', shelves: buildShelves([8, -8], [-6, -3, 0, 3, 6]) }
     case 'dense':
-      return { name: 'Dense', shelves: buildShelves([8, 5, -5, -8], [-6, -3, 0, 3, 6]) }
+      return { name: 'High density', shelves: buildShelves([8, 5, -5, -8], [-6, -3, 0, 3, 6]) }
   }
 }
 
@@ -113,8 +113,6 @@ export function createWarehouseConfig(
     pickDurationTicks: 6,
     deliverDurationTicks: 6,
     throughputWindowTicks: Math.ceil(60_000 / tickMs),
-    metricsSampleTicks: Math.ceil(2_000 / tickMs),
-    efficiencyHistoryLength: 7,
     maxCompletedOrdersHistory: 60,
     maxCycleSamples: 20,
     seed: 12345,
@@ -241,12 +239,6 @@ export function validateConfig(config: WarehouseConfig): ValidationResult {
   if (!isPositiveInteger(config.deliverDurationTicks)) errors.push('deliverDurationTicks must be a positive integer')
   if (!isPositiveInteger(config.throughputWindowTicks)) {
     errors.push('throughputWindowTicks must be a positive integer')
-  }
-  if (!isPositiveInteger(config.metricsSampleTicks)) {
-    errors.push('metricsSampleTicks must be a positive integer')
-  }
-  if (!isPositiveInteger(config.efficiencyHistoryLength)) {
-    errors.push('efficiencyHistoryLength must be a positive integer')
   }
   if (!isPositiveInteger(config.maxCompletedOrdersHistory)) {
     errors.push('maxCompletedOrdersHistory must be a positive integer')

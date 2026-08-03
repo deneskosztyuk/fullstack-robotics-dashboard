@@ -120,12 +120,20 @@ describe('NavigationEngine timing and controls', () => {
 describe('NavigationEngine tasks and safety', () => {
   it('completes deterministic shelf-to-dock task cycles from zero metrics', () => {
     const engine = new NavigationEngine(createWarehouseConfig('open', 1))
-    expect(engine.getSnapshot().completedOrders).toBe(0)
+    const initial = engine.getSnapshot()
+    expect(initial.completedOrders).toBe(0)
+    expect(initial.cycleSampleCount).toBe(0)
+    expect(initial.robots[0]).toEqual(expect.objectContaining({
+      waitingSinceTick: 0,
+    }))
+
     advanceTicks(engine, 200)
     const snapshot = engine.getSnapshot()
     expect(snapshot.completedOrders).toBeGreaterThan(0)
-    expect(snapshot.throughputMinute).toBeGreaterThan(0)
+    expect(snapshot.deliveriesLast60Seconds).toBeGreaterThan(0)
     expect(snapshot.avgCycleSeconds).toBeGreaterThan(0)
+    expect(snapshot.cycleSampleCount).toBeGreaterThan(0)
+    expect(snapshot.cycleSampleCount).toBeLessThanOrEqual(engine.getConfig().maxCycleSamples)
   })
 
   it('sends a low-battery robot without cargo to charge', () => {

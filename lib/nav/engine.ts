@@ -9,7 +9,6 @@ import {
   headingBetween,
   isMovingTask,
   routeStepAt,
-  statusForTask,
   taskLabel,
   type PlanIntent,
   type RobotRuntimeState,
@@ -64,7 +63,6 @@ export class NavigationEngine {
   private completedOrders = 0
   private orderCompletionTicks: number[] = []
   private cycleTimesTicks: number[] = []
-  private efficiencyHistory: number[] = []
   private nextEventId = 0
   private spawnWarningEmitted = false
 
@@ -74,11 +72,6 @@ export class NavigationEngine {
     this.grid = new GridMap(this.config)
     this.rng = new Rng(this.config.seed)
     this.initializeRobots()
-    const efficiency = this.calculateEfficiency()
-    this.efficiencyHistory = Array.from(
-      { length: this.config.efficiencyHistoryLength },
-      () => efficiency
-    )
   }
 
   advance(dtMs: number): void {
@@ -107,10 +100,9 @@ export class NavigationEngine {
       tick: this.tick,
       robots,
       completedOrders: this.completedOrders,
-      throughputMinute: this.currentThroughput(),
+      deliveriesLast60Seconds: this.deliveriesInThroughputWindow(),
       avgCycleSeconds: this.averageCycleSeconds(),
-      efficiencyPercent: this.calculateEfficiency(),
-      efficiencyHistory: [...this.efficiencyHistory],
+      cycleSampleCount: this.cycleTimesTicks.length,
       paused: this.paused,
       speed: this.speed,
       layoutId: this.config.layoutId,
@@ -224,11 +216,6 @@ export class NavigationEngine {
     this.spawnWarningEmitted = false
     this.desiredRobotCount = this.config.robotCount
     this.initializeRobots()
-    const efficiency = this.calculateEfficiency()
-    this.efficiencyHistory = Array.from(
-      { length: this.config.efficiencyHistoryLength },
-      () => efficiency
-    )
     this.emitSnapshot()
   }
 
@@ -274,7 +261,6 @@ export class NavigationEngine {
     this.processPlanningQueue()
     this.reservations.pruneBefore(this.tick)
     this.pruneMetricWindows()
-    this.sampleEfficiency()
     this.emitSnapshot()
   }
 
@@ -376,7 +362,6 @@ export class NavigationEngine {
       `Robot #${robot.id} completed order #${this.completedOrders}`,
       robot.id
     )
-    this.emitEvent('alert', 'info', `Order #${this.completedOrders} delivered`, robot.id)
 
     if (robot.needsCharge || robot.battery <= this.config.battery.lowThreshold) {
       robot.needsCharge = true
@@ -602,22 +587,6 @@ export class NavigationEngine {
     return dock !== undefined && sameCell(robot.cell, dock.cell)
   }
 
-  private sampleEfficiency(): void {
-    if (this.tick % this.config.metricsSampleTicks !== 0) return
-    this.efficiencyHistory = [
-      ...this.efficiencyHistory.slice(-(this.config.efficiencyHistoryLength - 1)),
-      this.calculateEfficiency(),
-    ]
-  }
-
-  private calculateEfficiency(): number {
-    const robots = [...this.robots.values()]
-    if (robots.length === 0) return 0
-    const activeCount = robots.filter((robot) => statusForTask(robot.kind) === 'active').length
-    const averageBattery = robots.reduce((sum, robot) => sum + robot.battery, 0) / robots.length
-    return (activeCount / robots.length) * averageBattery
-  }
-
   private pruneMetricWindows(): void {
     const earliestTick = this.tick - this.config.throughputWindowTicks
     this.orderCompletionTicks = this.orderCompletionTicks
@@ -625,7 +594,7 @@ export class NavigationEngine {
       .slice(-this.config.maxCompletedOrdersHistory)
   }
 
-  private currentThroughput(): number {
+  private deliveriesInThroughputWindow(): number {
     const earliestTick = this.tick - this.config.throughputWindowTicks
     return this.orderCompletionTicks.filter((tick) => tick >= earliestTick).length
   }
@@ -642,6 +611,8 @@ export class NavigationEngine {
       kind: robot.kind,
       shelfId: robot.shelfId,
       dockId: robot.dockId,
+      arrivalTick: robot.arrivalTick,
+      waitingSinceTick: robot.waitingSinceTick,
       battery: robot.battery,
       hasCargo: robot.hasCargo,
       needsCharge: robot.needsCharge,

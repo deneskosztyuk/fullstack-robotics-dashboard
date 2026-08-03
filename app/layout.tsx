@@ -1,18 +1,20 @@
 import type { Metadata } from "next"
-import { Inter, Geist } from "next/font/google"
+import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
-import { cn } from "@/lib/utils";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
-
-const inter = Inter({
+const geistSans = Geist({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-geist-sans",
+})
+
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-geist-mono",
 })
 
 export const metadata: Metadata = {
-  title: "Warehouse Robotics Dashboard",
-  description: "3D warehouse automation monitoring system - Built with Next.js, React & Three.js",
+  title: "AMR Traffic Simulator",
+  description: "Deterministic synthetic warehouse traffic simulation for autonomous mobile robots.",
 }
 
 interface RootLayoutProps {
@@ -21,10 +23,8 @@ interface RootLayoutProps {
 
 export default function RootLayout({ children }: Readonly<RootLayoutProps>) {
   return (
-    <html lang="en" className={cn("font-sans", geist.variable)}>
-      <body className={inter.variable}>
-        {children}
-      </body>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body>{children}</body>
     </html>
   )
 }

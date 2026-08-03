@@ -7,7 +7,7 @@ import type {
 } from './types'
 
 export type PlanIntent = 'shelf' | 'dock_delivery' | 'dock_charge'
-export type RobotStatus = 'active' | 'charging' | 'idle'
+export type RobotStatus = 'executing' | 'waiting' | 'charging'
 
 export interface RobotRuntimeState {
   id: RobotId
@@ -65,30 +65,36 @@ export function isMovingTask(kind: RobotTaskKind): boolean {
 
 export function taskLabel(kind: RobotTaskKind): string {
   const labels: Record<RobotTaskKind, string> = {
-    idle: 'Idle',
-    to_shelf: 'Moving to Shelf',
-    picking: 'Picking Items',
-    to_dock: 'Returning to Dock',
-    delivering: 'Delivering',
-    wait_dock: 'Waiting for Dock',
-    to_charge: 'Low Battery - Returning',
+    idle: 'Awaiting assignment',
+    to_shelf: 'En route to shelf',
+    picking: 'Picking',
+    to_dock: 'En route to dock',
+    delivering: 'Unloading at dock',
+    wait_dock: 'Waiting for dock',
+    to_charge: 'En route to charge',
     charging: 'Charging',
-    wait_path: 'Waiting for Route',
+    wait_path: 'Waiting for route',
   }
   return labels[kind]
 }
 
 export function statusForTask(kind: RobotTaskKind): RobotStatus {
-  if (kind === 'charging' || kind === 'to_charge' || kind === 'wait_dock') return 'charging'
-  if (kind === 'idle' || kind === 'wait_path') return 'idle'
-  return 'active'
+  if (kind === 'charging' || kind === 'to_charge') return 'charging'
+  if (kind === 'idle' || kind === 'wait_path' || kind === 'wait_dock') return 'waiting'
+  return 'executing'
 }
 
 export function locationForCell(config: WarehouseConfig, cell: Cell): string {
-  if (config.docks.some((dock) => dock.cell.x === cell.x && dock.cell.z === cell.z)) return 'Dock'
-  if (cell.x > 5) return 'Zone A'
-  if (cell.x < -5) return 'Zone B'
-  return 'Zone C'
+  const dock = config.docks.find((candidate) => candidate.cell.x === cell.x && candidate.cell.z === cell.z)
+  if (dock) return `Dock D${dock.id}`
+
+  const pickFace = config.shelves.find((shelf) => shelf.pickCell.x === cell.x && shelf.pickCell.z === cell.z)
+  if (pickFace) return `Shelf ${pickFace.id} pick face`
+
+  const shelf = config.shelves.find((candidate) => candidate.cell.x === cell.x && candidate.cell.z === cell.z)
+  if (shelf) return `Shelf ${shelf.id}`
+
+  return `Cell ${cell.x}, ${cell.z}`
 }
 
 export function headingBetween(from: Cell, to: Cell, fallback: number): number {

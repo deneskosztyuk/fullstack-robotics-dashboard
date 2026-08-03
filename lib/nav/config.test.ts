@@ -99,14 +99,12 @@ describe('validateConfig', () => {
       value.tickMs = 0
       value.replanWindow = value.horizon + 1
       value.maxPlansPerTick = 0
-      value.metricsSampleTicks = 0
       value.maxCycleSamples = 0
     })
     const { errors } = validateConfig(config)
     expect(errors.some((error) => error.includes('tickMs'))).toBe(true)
     expect(errors.some((error) => error.includes('replanWindow'))).toBe(true)
     expect(errors.some((error) => error.includes('maxPlansPerTick'))).toBe(true)
-    expect(errors.some((error) => error.includes('metricsSampleTicks'))).toBe(true)
     expect(errors.some((error) => error.includes('maxCycleSamples'))).toBe(true)
   })
 

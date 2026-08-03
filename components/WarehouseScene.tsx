@@ -1,7 +1,7 @@
 'use client'
 
-import { Canvas, useFrame } from '@react-three/fiber'
-import { Box, Grid, OrbitControls, Sphere } from '@react-three/drei'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { Box, Grid, OrbitControls, PerspectiveCamera, Sphere } from '@react-three/drei'
 import { RotateCcw } from 'lucide-react'
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
@@ -11,20 +11,21 @@ import type { RobotRenderPose, RobotSnapshot } from '@/lib/nav'
 const TURN_SPEED = 6
 
 const ROBOT_BODY_COLOR = '#d4d4d8'
-const GRID_CELL_COLOR = '#374151'
-const GRID_SECTION_COLOR = '#4b5563'
+const GRID_CELL_COLOR = '#334155'
+const GRID_SECTION_COLOR = '#64748b'
 const SHELF_BODY_COLOR = '#a1a1aa'
 const SHELF_SHELF_COLOR = '#71717a'
 const DOCK_BASE_COLOR = '#1f2937'
 const DOCK_POST_COLOR = '#374151'
 const CARGO_EMPTY_COLOR = '#374151'
 const CARGO_LOADED_COLOR = '#3b82f6'
-const LABEL_COLOR = '#52525b'
-const DOCK_LABEL_COLOR = '#9ca3af'
+const LABEL_COLOR = '#d4d4d8'
+const RESOURCE_LABEL_COLOR = '#a1a1aa'
 const WHEEL_COLOR = '#111827'
 const SCENE_BG_COLOR = '#0a0a0a'
 const LIGHT_PRIMARY_COLOR = '#3b82f6'
 const LIGHT_NEUTRAL_COLOR = '#6b7280'
+const SELECTION_COLOR = '#38bdf8'
 const FRAME_TIMEOUT_MESSAGE = 'The browser did not execute the 3D animation frame.'
 const FRAME_FALLBACK_MS = 1000 / 30
 
@@ -74,6 +75,8 @@ installAnimationFrameFallback()
 interface RobotProps {
   robot: RobotSnapshot
   getPose: (id: number) => RobotRenderPose | undefined
+  selected: boolean
+  onSelect: (id: number) => void
 }
 
 interface SceneErrorBoundaryProps {
@@ -109,7 +112,15 @@ function RenderHeartbeat({ onFirstFrame }: { onFirstFrame: () => void }) {
   return null
 }
 
-function Robot({ robot, getPose }: RobotProps) {
+function ResponsiveCamera() {
+  const { size } = useThree()
+  const portrait = size.width / size.height < 0.9
+  const position: [number, number, number] = portrait ? [18, 18, 18] : [12, 13, 14]
+
+  return <PerspectiveCamera makeDefault position={position} fov={portrait ? 50 : 38} />
+}
+
+function Robot({ robot, getPose, selected, onSelect }: RobotProps) {
   const ref = useRef<THREE.Group>(null)
 
   useFrame((_, delta) => {
@@ -131,12 +142,36 @@ function Robot({ robot, getPose }: RobotProps) {
   })
 
   return (
-    <group ref={ref} position={[robot.cell.x, 0, robot.cell.z]} rotation={[0, robot.heading, 0]}>
+    <group
+      ref={ref}
+      position={[robot.cell.x, 0, robot.cell.z]}
+      rotation={[0, robot.heading, 0]}
+      onClick={(event) => {
+        event.stopPropagation()
+        onSelect(robot.id)
+      }}
+    >
+      {selected && <SelectionRing />}
       <RobotBody />
       <RobotWheels />
       <RobotCargo loaded={robot.hasCargo} />
-      <RobotLabels robot={robot} />
+      <RobotLabels robot={robot} selected={selected} />
     </group>
+  )
+}
+
+function SelectionRing() {
+  return (
+    <mesh position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.72, 0.9, 32]} />
+      <meshBasicMaterial
+        color={SELECTION_COLOR}
+        transparent
+        opacity={0.9}
+        side={THREE.DoubleSide}
+        toneMapped={false}
+      />
+    </mesh>
   )
 }
 
@@ -225,26 +260,46 @@ function LabelSprite({
   )
 }
 
-function RobotLabels({ robot }: { robot: RobotSnapshot }) {
+function RobotLabels({ robot, selected }: { robot: RobotSnapshot; selected: boolean }) {
+  const color = selected ? SELECTION_COLOR : LABEL_COLOR
+
   return (
     <>
       <LabelSprite
         text={`R${robot.id} · ${Math.round(robot.battery)}%`}
         position={[0, 1.2, 0]}
-        color={LABEL_COLOR}
+        color={color}
         height={0.26}
       />
       <LabelSprite
         text={robot.retireWhenParked ? 'RETIRING' : robot.taskLabel.toUpperCase()}
         position={[0, 1.5, 0]}
-        color={LABEL_COLOR}
+        color={color}
         height={0.14}
       />
     </>
   )
 }
 
-function Shelf({ position }: { position: [number, number, number] }) {
+function TargetMarker({ label, position }: { label: string; position: [number, number, number] }) {
+  return (
+    <group position={position}>
+      <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.42, 0.58, 32]} />
+        <meshBasicMaterial
+          color={SELECTION_COLOR}
+          transparent
+          opacity={0.75}
+          side={THREE.DoubleSide}
+          toneMapped={false}
+        />
+      </mesh>
+      <LabelSprite text={label} position={[0, 0.32, 0]} color={SELECTION_COLOR} height={0.15} />
+    </group>
+  )
+}
+
+function Shelf({ id, position }: { id: string; position: [number, number, number] }) {
   return (
     <group position={position}>
       <Box args={[1.5, 2, 0.5]} position={[0, 1, 0]}>
@@ -255,6 +310,7 @@ function Shelf({ position }: { position: [number, number, number] }) {
           <meshStandardMaterial color={SHELF_SHELF_COLOR} />
         </Box>
       ))}
+      <LabelSprite text={`SHELF ${id}`} position={[0, 2.35, 0]} color={RESOURCE_LABEL_COLOR} height={0.16} />
     </group>
   )
 }
@@ -277,19 +333,36 @@ function DockingStation({ id, position }: { id: number; position: [number, numbe
           <meshStandardMaterial color={DOCK_POST_COLOR} />
         </Box>
       ))}
-      <LabelSprite text={`D${id}`} position={[0, 0.75, 0]} color={DOCK_LABEL_COLOR} height={0.18} />
+      <LabelSprite text={`D${id}`} position={[0, 0.75, 0]} color={RESOURCE_LABEL_COLOR} height={0.18} />
     </group>
   )
 }
 
 export default function WarehouseScene() {
-  const { config, getRobotPose, navigationSnapshot } = useWarehouse()
+  const {
+    config,
+    getRobotPose,
+    navigationSnapshot,
+    selectedRobot,
+    selectedRobotId,
+    selectRobot,
+  } = useWarehouse()
   const [rendererFailure, setRendererFailure] = useState<string | null>(null)
   const [canvasKey, setCanvasKey] = useState(0)
   const firstFrameRendered = useRef(false)
   const width = config.grid.maxX - config.grid.minX
   const depth = config.grid.maxZ - config.grid.minZ
   const gridSize = Math.max(width, depth)
+  const selectedTarget = selectedRobot?.shelfId
+    ? config.shelves.find((shelf) => shelf.id === selectedRobot.shelfId)?.pickCell
+    : selectedRobot?.dockId !== undefined
+      ? config.docks.find((dock) => dock.id === selectedRobot.dockId)?.cell
+      : undefined
+  const selectedTargetLabel = selectedRobot?.shelfId
+    ? `TARGET ${selectedRobot.shelfId}`
+    : selectedRobot?.dockId !== undefined
+      ? `TARGET D${selectedRobot.dockId}`
+      : null
 
   useEffect(() => {
     const resize = setTimeout(() => window.dispatchEvent(new Event('resize')), 0)
@@ -327,13 +400,13 @@ export default function WarehouseScene() {
     <div className="relative w-full h-full">
       <SceneErrorBoundary key={canvasKey} onError={setRendererFailure}>
         <Canvas
-          camera={{ position: [15, 15, 15], fov: 50 }}
           dpr={[1, 1.5]}
           gl={{ antialias: false, powerPreference: 'default' }}
           onCreated={handleCreated}
           style={{ width: '100%', height: '100%', display: 'block' }}
         >
           <RenderHeartbeat onFirstFrame={handleFirstFrame} />
+          <ResponsiveCamera />
           <color attach="background" args={[SCENE_BG_COLOR]} />
           <SceneLighting />
           <Grid
@@ -352,11 +425,23 @@ export default function WarehouseScene() {
             />
           ))}
           {config.shelves.map((shelf) => (
-            <Shelf key={shelf.id} position={[shelf.cell.x, 0, shelf.cell.z]} />
+            <Shelf key={shelf.id} id={shelf.id} position={[shelf.cell.x, 0, shelf.cell.z]} />
           ))}
           {navigationSnapshot.robots.map((robot) => (
-            <Robot key={robot.id} robot={robot} getPose={getRobotPose} />
+            <Robot
+              key={robot.id}
+              robot={robot}
+              getPose={getRobotPose}
+              selected={robot.id === selectedRobotId}
+              onSelect={selectRobot}
+            />
           ))}
+          {selectedTarget && selectedTargetLabel && (
+            <TargetMarker
+              label={selectedTargetLabel}
+              position={[selectedTarget.x, 0, selectedTarget.z]}
+            />
+          )}
 
           <OrbitControls
             enablePan

@@ -19,18 +19,19 @@ describe('task helpers', () => {
     expect(robot.retryDelayTicks).toBe(2)
   })
 
-  it('maps task labels and dashboard statuses', () => {
-    expect(taskLabel('wait_dock')).toBe('Waiting for Dock')
+  it('maps task labels and fleet statuses', () => {
+    expect(taskLabel('wait_dock')).toBe('Waiting for dock')
     expect(statusForTask('to_charge')).toBe('charging')
-    expect(statusForTask('wait_path')).toBe('idle')
-    expect(statusForTask('picking')).toBe('active')
+    expect(statusForTask('wait_dock')).toBe('waiting')
+    expect(statusForTask('wait_path')).toBe('waiting')
+    expect(statusForTask('picking')).toBe('executing')
   })
 
-  it('maps exact dock cells and warehouse zones', () => {
-    expect(locationForCell(DEFAULT_CONFIG, { x: 0, z: 0 })).toBe('Dock')
-    expect(locationForCell(DEFAULT_CONFIG, { x: 7, z: 4 })).toBe('Zone A')
-    expect(locationForCell(DEFAULT_CONFIG, { x: -7, z: 4 })).toBe('Zone B')
-    expect(locationForCell(DEFAULT_CONFIG, { x: 2, z: 4 })).toBe('Zone C')
+  it('maps exact resources and grid cells', () => {
+    expect(locationForCell(DEFAULT_CONFIG, { x: 0, z: 0 })).toBe('Dock D1')
+    expect(locationForCell(DEFAULT_CONFIG, DEFAULT_CONFIG.shelves[0].pickCell)).toBe('Shelf A pick face')
+    expect(locationForCell(DEFAULT_CONFIG, DEFAULT_CONFIG.shelves[0].cell)).toBe('Shelf A')
+    expect(locationForCell(DEFAULT_CONFIG, { x: 7, z: 4 })).toBe('Cell 7, 4')
   })
 
   it('preserves heading while waiting and turns toward movement', () => {

@@ -61,8 +61,6 @@ export interface WarehouseConfig {
   pickDurationTicks: number
   deliverDurationTicks: number
   throughputWindowTicks: number
-  metricsSampleTicks: number
-  efficiencyHistoryLength: number
   maxCompletedOrdersHistory: number
   maxCycleSamples: number
   seed: number
@@ -85,6 +83,8 @@ export interface RobotSnapshot {
   kind: RobotTaskKind
   shelfId?: string
   dockId?: number
+  arrivalTick?: number
+  waitingSinceTick: number
   battery: number
   hasCargo: boolean
   needsCharge: boolean
@@ -100,10 +100,9 @@ export interface EngineSnapshot {
   tick: number
   robots: RobotSnapshot[]
   completedOrders: number
-  throughputMinute: number
+  deliveriesLast60Seconds: number
   avgCycleSeconds: number
-  efficiencyPercent: number
-  efficiencyHistory: number[]
+  cycleSampleCount: number
   paused: boolean
   speed: SimulationSpeed
   layoutId: LayoutId
