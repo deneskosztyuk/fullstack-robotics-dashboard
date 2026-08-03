@@ -1,9 +1,9 @@
 'use client'
 
 import { Canvas, useFrame } from '@react-three/fiber'
-import { Box, Grid, OrbitControls, Sphere, Text } from '@react-three/drei'
+import { Box, Grid, OrbitControls, Sphere } from '@react-three/drei'
 import { RotateCcw } from 'lucide-react'
-import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { useWarehouse } from '@/lib/WarehouseContext'
 import type { RobotRenderPose, RobotSnapshot } from '@/lib/nav'
@@ -26,6 +26,50 @@ const SCENE_BG_COLOR = '#0a0a0a'
 const LIGHT_PRIMARY_COLOR = '#3b82f6'
 const LIGHT_NEUTRAL_COLOR = '#6b7280'
 const FRAME_TIMEOUT_MESSAGE = 'The browser did not execute the 3D animation frame.'
+const FRAME_FALLBACK_MS = 1000 / 30
+
+function installAnimationFrameFallback() {
+  if (typeof window === 'undefined') return
+
+  const patchedWindow = window as Window & { warehouseAnimationFrameFallback?: boolean }
+  if (patchedWindow.warehouseAnimationFrameFallback) return
+
+  const nativeRequest = window.requestAnimationFrame.bind(window)
+  const nativeCancel = window.cancelAnimationFrame.bind(window)
+  const pendingFrames = new Map<number, { native: number; fallback: number }>()
+  let nextFrame = 1
+
+  patchedWindow.requestAnimationFrame = (callback) => {
+    const frame = nextFrame++
+    let completed = false
+    const run = (timestamp: number) => {
+      if (completed) return
+      completed = true
+      const pending = pendingFrames.get(frame)
+      if (pending) {
+        nativeCancel(pending.native)
+        clearTimeout(pending.fallback)
+        pendingFrames.delete(frame)
+      }
+      callback(timestamp)
+    }
+    const native = nativeRequest(run)
+    const fallback = window.setTimeout(() => run(performance.now()), FRAME_FALLBACK_MS)
+    pendingFrames.set(frame, { native, fallback })
+    return frame
+  }
+
+  patchedWindow.cancelAnimationFrame = (frame) => {
+    const pending = pendingFrames.get(frame)
+    if (!pending) return
+    nativeCancel(pending.native)
+    clearTimeout(pending.fallback)
+    pendingFrames.delete(frame)
+  }
+  patchedWindow.warehouseAnimationFrameFallback = true
+}
+
+installAnimationFrameFallback()
 
 interface RobotProps {
   robot: RobotSnapshot
@@ -131,15 +175,71 @@ function RobotCargo({ loaded }: { loaded: boolean }) {
   )
 }
 
+function LabelSprite({
+  text,
+  position,
+  color,
+  height,
+}: {
+  text: string
+  position: [number, number, number]
+  color: string
+  height: number
+}) {
+  const label = useMemo(() => {
+    const fontSize = 48
+    const padding = 12
+    const canvas = document.createElement('canvas')
+    const measure = canvas.getContext('2d')
+    if (!measure) throw new Error('Canvas 2D text rendering is unavailable.')
+
+    measure.font = `600 ${fontSize}px sans-serif`
+    canvas.width = Math.ceil(measure.measureText(text).width) + padding * 2
+    canvas.height = fontSize + padding * 2
+
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Canvas 2D text rendering is unavailable.')
+    context.font = `600 ${fontSize}px sans-serif`
+    context.fillStyle = color
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+    context.fillText(text, canvas.width / 2, canvas.height / 2)
+
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    return { texture, aspect: canvas.width / canvas.height }
+  }, [color, text])
+
+  useEffect(() => () => label.texture.dispose(), [label])
+
+  return (
+    <sprite position={position} scale={[height * label.aspect, height, 1]} renderOrder={10}>
+      <spriteMaterial
+        map={label.texture}
+        transparent
+        depthTest={false}
+        depthWrite={false}
+        toneMapped={false}
+      />
+    </sprite>
+  )
+}
+
 function RobotLabels({ robot }: { robot: RobotSnapshot }) {
   return (
     <>
-      <Text position={[0, 1.2, 0]} fontSize={0.26} color={LABEL_COLOR} anchorX="center">
-        R{robot.id} · {Math.round(robot.battery)}%
-      </Text>
-      <Text position={[0, 1.5, 0]} fontSize={0.14} color={LABEL_COLOR} anchorX="center">
-        {robot.retireWhenParked ? 'RETIRING' : robot.taskLabel.toUpperCase()}
-      </Text>
+      <LabelSprite
+        text={`R${robot.id} · ${Math.round(robot.battery)}%`}
+        position={[0, 1.2, 0]}
+        color={LABEL_COLOR}
+        height={0.26}
+      />
+      <LabelSprite
+        text={robot.retireWhenParked ? 'RETIRING' : robot.taskLabel.toUpperCase()}
+        position={[0, 1.5, 0]}
+        color={LABEL_COLOR}
+        height={0.14}
+      />
     </>
   )
 }
@@ -177,9 +277,7 @@ function DockingStation({ id, position }: { id: number; position: [number, numbe
           <meshStandardMaterial color={DOCK_POST_COLOR} />
         </Box>
       ))}
-      <Text position={[0, 0.75, 0]} fontSize={0.18} color={DOCK_LABEL_COLOR} anchorX="center">
-        D{id}
-      </Text>
+      <LabelSprite text={`D${id}`} position={[0, 0.75, 0]} color={DOCK_LABEL_COLOR} height={0.18} />
     </group>
   )
 }
@@ -194,13 +292,17 @@ export default function WarehouseScene() {
   const gridSize = Math.max(width, depth)
 
   useEffect(() => {
+    const resize = setTimeout(() => window.dispatchEvent(new Event('resize')), 0)
     const watchdog = setTimeout(() => {
       if (!firstFrameRendered.current) {
         setRendererFailure(FRAME_TIMEOUT_MESSAGE)
       }
     }, 3000)
 
-    return () => clearTimeout(watchdog)
+    return () => {
+      clearTimeout(resize)
+      clearTimeout(watchdog)
+    }
   }, [canvasKey])
 
   const handleCreated = useCallback(({ gl }: { gl: THREE.WebGLRenderer }) => {
