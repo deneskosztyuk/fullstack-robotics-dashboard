@@ -280,4 +280,22 @@ describe('NavigationEngine tasks and safety', () => {
     expect(snapshot.completedTransfers).toBeGreaterThan(0)
     expect(snapshot.completedOrders).toBeGreaterThan(snapshot.completedTransfers)
   }, 15_000)
+
+  it('keeps a thirty-two-robot dense fleet productive over a long run', () => {
+    const engine = new NavigationEngine(createWarehouseConfig('dense', 32))
+
+    advanceTicks(engine, 1_000)
+    const completedAtCheckpoint = engine.getSnapshot().completedOrders +
+      engine.getSnapshot().completedTransfers
+
+    advanceTicks(engine, 4_000)
+    const snapshot = engine.getSnapshot()
+    const completedAtEnd = snapshot.completedOrders + snapshot.completedTransfers
+    const waitingRobots = snapshot.robots.filter((robot) =>
+      robot.kind === 'idle' || robot.kind === 'wait_path' || robot.kind === 'wait_dock'
+    )
+
+    expect(completedAtEnd).toBeGreaterThan(completedAtCheckpoint)
+    expect(waitingRobots.length).toBeLessThan(snapshot.robots.length)
+  }, 30_000)
 })

@@ -471,6 +471,8 @@ export class NavigationEngine {
 
   private prepareResourceClaims(): void {
     for (const robot of [...this.robots.values()].sort((first, second) => first.id - second.id)) {
+      if (robot.retryAtTick > this.tick) continue
+
       if (robot.planIntent === 'shelf_pickup' && robot.shelfId === undefined) {
         const shelf = this.rng.pick(this.claims.availableShelves(this.config.shelves))
         if (shelf && this.claims.claimShelf(shelf.id, robot.id)) robot.shelfId = shelf.id
@@ -545,6 +547,12 @@ export class NavigationEngine {
         this.emitEvent('alert', 'warning', `Robot #${robot.id} is waiting for a route`, robot.id)
         robot.planFailureWarned = true
       }
+      if (this.tick - robot.waitingSinceTick >= this.config.replanWindow) {
+        this.releaseBlockedGoal(robot, intent)
+        robot.waitingSinceTick = this.tick
+        robot.retryAtTick = this.tick + this.config.retryBackoff.initialTicks
+        robot.retryDelayTicks = this.config.retryBackoff.initialTicks
+      }
       return
     }
 
@@ -569,6 +577,24 @@ export class NavigationEngine {
     }
 
     if (plan.arrivalTick === this.tick) this.finishArrival(robot)
+  }
+
+  private releaseBlockedGoal(robot: RobotRuntimeState, intent: PlanIntent): void {
+    if (intent === 'shelf_pickup') {
+      this.releaseShelfClaims(robot)
+      return
+    }
+    if (intent === 'shelf_drop') {
+      if (robot.destinationShelfId !== undefined) {
+        this.claims.releaseShelf(robot.destinationShelfId, robot.id)
+        robot.destinationShelfId = undefined
+      }
+      return
+    }
+    if (robot.dockId !== undefined) {
+      this.claims.releaseDock(robot.dockId, robot.id)
+      robot.dockId = undefined
+    }
   }
 
   private goalFor(robot: RobotRuntimeState): Cell | undefined {
