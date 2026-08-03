@@ -27,7 +27,7 @@ export const LAYOUT_PRESETS: readonly LayoutPreset[] = [
   { id: 'dense', name: 'High density' },
 ]
 
-export const DEFAULT_LAYOUT_ID: LayoutId = 'open'
+export const DEFAULT_LAYOUT_ID: LayoutId = 'dense'
 
 const GRID = { minX: -10, maxX: 10, minZ: -10, maxZ: 10 }
 const DOCKS: readonly DockConfig[] = [
@@ -84,7 +84,7 @@ function layoutDefinition(layoutId: LayoutId): { name: string; shelves: ShelfCon
 
 export function createWarehouseConfig(
   layoutId: LayoutId = DEFAULT_LAYOUT_ID,
-  robotCount = 4
+  robotCount = 12
 ): WarehouseConfig {
   const layout = layoutDefinition(layoutId)
   const tickMs = 340

@@ -29,9 +29,10 @@ describe('warehouse layout presets', () => {
     }
   })
 
-  it('uses the locked 340 ms tick and four initial robots', () => {
+  it('uses the locked 340 ms tick and dense twelve-robot default', () => {
     expect(DEFAULT_CONFIG.tickMs).toBe(340)
-    expect(DEFAULT_CONFIG.robotCount).toBe(4)
+    expect(DEFAULT_CONFIG.layoutId).toBe('dense')
+    expect(DEFAULT_CONFIG.robotCount).toBe(12)
   })
 
   it('returns fresh preset copies', () => {
