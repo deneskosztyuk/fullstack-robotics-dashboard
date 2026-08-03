@@ -25,19 +25,23 @@ const DATE_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
 }
 
 export function Navbar() {
-  const [currentTime, setCurrentTime] = useState(new Date())
+  const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const { robots, stats, throughput } = useWarehouse()
 
   useEffect(() => {
+    const initialTimer = setTimeout(() => setCurrentTime(new Date()), 0)
     const timer = setInterval(() => {
       setCurrentTime(new Date())
     }, CLOCK_UPDATE_INTERVAL)
 
-    return () => clearInterval(timer)
+    return () => {
+      clearTimeout(initialTimer)
+      clearInterval(timer)
+    }
   }, [])
 
-  const formattedTime = currentTime.toLocaleTimeString(LOCALE, TIME_FORMAT_OPTIONS)
-  const formattedDate = currentTime.toLocaleDateString(LOCALE, DATE_FORMAT_OPTIONS)
+  const formattedTime = currentTime?.toLocaleTimeString(LOCALE, TIME_FORMAT_OPTIONS) ?? '--:--:--'
+  const formattedDate = currentTime?.toLocaleDateString(LOCALE, DATE_FORMAT_OPTIONS) ?? '-- --- ----'
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-lg border-b border-border">
